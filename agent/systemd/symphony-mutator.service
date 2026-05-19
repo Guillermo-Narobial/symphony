@@ -1,0 +1,10 @@
+[Unit]
+Description=Symphony weekly mutation testing runner
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+Environment=PATH=/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npx tsx src/mutator.ts
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
+TimeoutStartSec=2400
