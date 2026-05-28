@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Symphony Agent — Orquestador de Desarrollo Autónomo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #121a2e;
+      --panel-2: #17213a;
+      --text: #eef4ff;
+      --muted: #9fb0cc;
+      --line: rgba(255, 255, 255, 0.14);
+      --cyan: #4cc9f0;
+      --green: #52d273;
+      --amber: #ffcc66;
+      --red: #ff6b6b;
+      --blue: #7aa2ff;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.36);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    body {
+      background:
+        linear-gradient(145deg, rgba(76, 201, 240, 0.14), transparent 34%),
+        linear-gradient(315deg, rgba(82, 210, 115, 0.09), transparent 38%),
+        #0b1020;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .deck {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      align-items: center;
+      padding: clamp(28px, 5vw, 72px);
+      opacity: 0;
+      transform: translateX(28px) scale(0.985);
+      pointer-events: none;
+      transition: opacity 420ms ease, transform 420ms ease;
+    }
+
+    .slide.active {
+      opacity: 1;
+      transform: translateX(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .slide.previous {
+      transform: translateX(-28px) scale(0.985);
+    }
+
+    .content {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--cyan);
+      font-size: clamp(13px, 1.4vw, 16px);
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 1050px;
+      font-size: clamp(44px, 7vw, 92px);
+      line-height: 0.98;
+      font-weight: 850;
+    }
+
+    h2 {
+      max-width: 980px;
+      font-size: clamp(34px, 5vw, 66px);
+      line-height: 1;
+      font-weight: 820;
+    }
+
+    h3 {
+      font-size: clamp(18px, 2.4vw, 28px);
+      line-height: 1.12;
+    }
+
+    .lead {
+      max-width: 850px;
+      margin-top: 24px;
+      color: var(--muted);
+      font-size: clamp(18px, 2.1vw, 28px);
+      line-height: 1.42;
+    }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+      margin-top: 34px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid.four {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .panel {
+      min-height: 120px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: clamp(18px, 2vw, 26px);
+      background: rgba(18, 26, 46, 0.82);
+      box-shadow: var(--shadow);
+    }
+
+    .panel.compact {
+      min-height: 0;
+      padding: 16px;
+    }
+
+    .panel strong {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--text);
+      font-size: clamp(17px, 2vw, 22px);
+    }
+
+    .panel span,
+    .panel p {
+      color: var(--muted);
+      font-size: clamp(14px, 1.5vw, 18px);
+      line-height: 1.42;
+    }
+
+    .accent {
+      color: var(--cyan);
+    }
+
+    .ok {
+      color: var(--green);
+    }
+
+    .warn {
+      color: var(--amber);
+    }
+
+    .danger {
+      color: var(--red);
+    }
+
+    .flow {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .node {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 14px;
+      background: rgba(23, 33, 58, 0.88);
+      text-align: center;
+    }
+
+    .node .icon {
+      display: block;
+      margin-bottom: 10px;
+      font-size: clamp(26px, 3.8vw, 42px);
+    }
+
+    .node b {
+      display: block;
+      font-size: clamp(15px, 1.8vw, 21px);
+    }
+
+    .node small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: clamp(12px, 1.2vw, 15px);
+      line-height: 1.28;
+    }
+
+    .arrow {
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      font-size: clamp(22px, 3vw, 36px);
+    }
+
+    .arch {
+      display: grid;
+      grid-template-columns: 1fr 1.25fr 1fr;
+      gap: 18px;
+      margin-top: 34px;
+      align-items: center;
+    }
+
+    .arch-center {
+      border: 1px solid rgba(76, 201, 240, 0.36);
+      border-radius: 8px;
+      padding: 24px;
+      background: rgba(15, 35, 58, 0.92);
+      box-shadow: var(--shadow);
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .calendar {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .day {
+      min-height: 170px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(18, 26, 46, 0.78);
+    }
+
+    .day b {
+      display: block;
+      margin-bottom: 14px;
+      color: var(--cyan);
+    }
+
+    .event {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .cycle {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .cycle .step {
+      min-height: 100px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(18, 26, 46, 0.82);
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .metric {
+      display: grid;
+      gap: 8px;
+      align-content: center;
+      min-height: 165px;
+      text-align: center;
+    }
+
+    .metric .value {
+      font-size: clamp(38px, 6vw, 74px);
+      font-weight: 850;
+      color: var(--cyan);
+    }
+
+    .controls {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-btn {
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(18, 26, 46, 0.86);
+      color: var(--text);
+      cursor: pointer;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    .nav-btn:hover {
+      transform: translateY(-2px);
+      border-color: rgba(76, 201, 240, 0.7);
+      background: rgba(23, 33, 58, 0.98);
+    }
+
+    .counter {
+      min-width: 72px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    .progress {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 21;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .progress span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--cyan), var(--green));
+      transition: width 260ms ease;
+    }
+
+    .click-zone {
+      position: fixed;
+      inset: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      pointer-events: none;
+    }
+
+    .click-zone button {
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+
+    .slide > .content {
+      position: relative;
+      z-index: 5;
+    }
+
+    @media (max-width: 980px) {
+      html,
+      body {
+        overflow-y: auto;
+      }
+
+      .deck {
+        min-height: 100vh;
+      }
+
+      .slide {
+        min-height: 100vh;
+        padding: 28px 18px 82px;
+      }
+
+      .slide.active {
+        overflow-y: auto;
+      }
+
+      .grid.two,
+      .grid.three,
+      .grid.four,
+      .arch,
+      .calendar,
+      .cycle {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        display: grid;
+      }
+
+      .arrow {
+        transform: rotate(90deg);
+      }
+
+      .day {
+        min-height: 0;
+      }
+
+      .controls {
+        right: 14px;
+        bottom: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck" aria-live="polite">
+    <section class="slide active">
+      <div class="content">
+        <div class="eyebrow">🎼 Symphony Agent</div>
+        <h1>Symphony Agent — Orquestador de Desarrollo Autónomo</h1>
+        <p class="lead">Un sistema que convierte incidencias Narobial en issues, PRs, previews, documentación, auditorías y release notes con agentes de IA coordinados por systemd.</p>
+        <div class="grid three">
+          <div class="panel compact"><strong>⏱️ Loop 5 min</strong><span>DMS → GitHub → agente</span></div>
+          <div class="panel compact"><strong>🤖 Kiro CLI</strong><span>Agente `narobial-frontend`</span></div>
+          <div class="panel compact"><strong>🚀 qdevweb</strong><span>Deploy preview automático</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">⚙️ Problema</div>
+        <h2>Del ciclo manual a un flujo trazable y automatizado</h2>
+        <div class="grid two">
+          <div class="panel">
+            <strong>Antes</strong>
+            <p>Lectura manual del DMS, interpretación de requisitos, creación de ramas, implementación, tests, PR, deploy y comunicación a stakeholders.</p>
+          </div>
+          <div class="panel">
+            <strong>Con Symphony</strong>
+            <p>El sistema valida, prioriza, ejecuta agentes, despliega previews, registra decisiones y genera alertas recurrentes.</p>
+          </div>
+        </div>
+        <div class="flow">
+          <div class="node"><span class="icon">📥</span><b>Entrada</b><small>Incidencias DMS</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🧠</span><b>Decisión</b><small>Validación + prioridad</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🛠️</span><b>Ejecución</b><small>Agente IA + tests</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">📣</span><b>Salida</b><small>PR, deploy, changelog</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🏗️ Arquitectura</div>
+        <h2>Un orquestador central con agentes especializados</h2>
+        <div class="arch">
+          <div class="stack">
+            <div class="pill">📥 DMS API</div>
+            <div class="pill">🐙 GitHub Issues</div>
+            <div class="pill">📧 SMTP Relay</div>
+          </div>
+          <div class="arch-center">
+            <h3>SYMPHONY AGENT</h3>
+            <div class="grid two">
+              <div class="panel compact"><strong>fetcher</strong><span>DMS</span></div>
+              <div class="panel compact"><strong>controller</strong><span>Zod + Q700</span></div>
+              <div class="panel compact"><strong>issuer</strong><span>Issues</span></div>
+              <div class="panel compact"><strong>solver</strong><span>Prioridad</span></div>
+              <div class="panel compact"><strong>runner</strong><span>kiro-cli</span></div>
+              <div class="panel compact"><strong>knowledge-base</strong><span>Decisiones</span></div>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="pill">🤖 narobial-frontend</div>
+            <div class="pill">🚀 qdevweb</div>
+            <div class="pill">📘 changelog</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🔁 Loop principal</div>
+        <h2>Cada 5 minutos: capturar, validar, crear issue y resolver</h2>
+        <div class="flow">
+          <div class="node"><span class="icon">📡</span><b>fetcher</b><small>Lee incidencias abiertas</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">✅</span><b>controller</b><small>Schema + Q700</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🎫</span><b>issuer</b><small>Issue estructurada</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">📊</span><b>solver</b><small>Scoring y slots</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🏃</span><b>runner</b><small>Rama, agente, deploy</small></div>
+        </div>
+        <div class="grid three">
+          <div class="panel compact"><strong>Concurrencia</strong><span>`MAX_CONCURRENT_AGENTS`</span></div>
+          <div class="panel compact"><strong>Estado</strong><span>`agente-trabajando`</span></div>
+          <div class="panel compact"><strong>Base</strong><span>`hotfix-master`</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🧠 Validación inteligente</div>
+        <h2>Solo entran al flujo las incidencias accionables</h2>
+        <div class="grid two">
+          <div class="panel">
+            <strong>🧪 Q700 Validator</strong>
+            <p>Comprueba requisitos mínimos, país, marca, cliente, contradicciones y ambigüedad. Si falla, envía email con campos a corregir.</p>
+          </div>
+          <div class="panel">
+            <strong>📚 Knowledge Base</strong>
+            <p>Busca decisiones anteriores en `narobial-changelog/decisiones/frontend` y las inyecta en el prompt del agente.</p>
+          </div>
+        </div>
+        <div class="flow">
+          <div class="node"><span class="icon">📝</span><b>Issue nueva</b><small>Texto DMS</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🔎</span><b>Calidad</b><small>Completa y coherente</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">📖</span><b>Memoria</b><small>Casos similares</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🎯</span><b>Prompt</b><small>Contexto preciso</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🤖 Ejecutor</div>
+        <h2>El agente `narobial-frontend` resuelve la issue end to end</h2>
+        <div class="grid three">
+          <div class="panel"><strong>1. Preparación</strong><span>Lee `AGENTS.md`, `INSTRUCTIONS.md` y detecta perfil de testing.</span></div>
+          <div class="panel"><strong>2. Implementación</strong><span>Respeta design system `nb-`, i18n, CSS variables y seguridad.</span></div>
+          <div class="panel"><strong>3. Verificación</strong><span>Ejecuta tests unitarios, cobertura y valida estados de UI.</span></div>
+          <div class="panel"><strong>4. PR</strong><span>Commit, push y PR contra `hotfix-master`.</span></div>
+          <div class="panel"><strong>5. Preview</strong><span>Build Docker + nginx en qdevweb con SSL.</span></div>
+          <div class="panel"><strong>6. Registro</strong><span>CHANGELOG.md y decisiones técnicas.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">📅 Agentes periódicos</div>
+        <h2>Una semana operativa cubierta por systemd timers</h2>
+        <div class="calendar">
+          <div class="day"><b>Lun</b><div class="event">📋 06:00<br>Release notes</div></div>
+          <div class="day"><b>Mar</b><div class="event">🚨 08:30<br>Alertas</div></div>
+          <div class="day"><b>Mié</b><div class="event">📝 07:40<br>JSDoc PR</div></div>
+          <div class="day"><b>Jue</b><div class="event">🚨 08:30<br>Alertas</div></div>
+          <div class="day"><b>Vie</b><div class="event">📦 19:00<br>Dependencias</div></div>
+          <div class="day"><b>Sáb</b><div class="event">🛡️ 08:00<br>Auditoría</div></div>
+          <div class="day"><b>Dom</b><div class="event">🧬 04:00<br>Mutation testing</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🛡️ Seguridad</div>
+        <h2>Tres capas: secretos, CVEs y análisis profundo</h2>
+        <div class="grid three">
+          <div class="panel"><strong>🔑 gitleaks</strong><span>Detecta secrets expuestos y abre issues críticas.</span></div>
+          <div class="panel"><strong>🧾 npm audit</strong><span>Filtra vulnerabilidades high y critical con fix sugerido.</span></div>
+          <div class="panel"><strong>🔍 kiro-cli</strong><span>Busca XSS, CSP, sanitización, memory leaks, bugs y UI.</span></div>
+        </div>
+        <p class="lead">Cada finding se convierte en una issue independiente con severidad, archivo, línea e instrucciones para el agente.</p>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">📈 Mejora continua</div>
+        <h2>Tests, documentación y dependencias se revisan de forma recurrente</h2>
+        <div class="grid three">
+          <div class="panel"><strong>🧬 Mutation testing</strong><span>Stryker detecta tests débiles y abre issues por archivo.</span></div>
+          <div class="panel"><strong>📝 Docs checker</strong><span>Genera JSDoc para código nuevo y abre PR revisable.</span></div>
+          <div class="panel"><strong>📦 Deps checker</strong><span>Actualiza patch/minor, ejecuta audit fix y publica resumen.</span></div>
+        </div>
+        <div class="grid two">
+          <div class="panel compact"><strong class="ok">Objetivo</strong><span>Menos deuda técnica acumulada.</span></div>
+          <div class="panel compact"><strong class="warn">Control</strong><span>Todo entra como issue o PR revisable.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🚨 Alertas proactivas</div>
+        <h2>Señales tempranas antes de que el backlog se degrade</h2>
+        <div class="grid three">
+          <div class="panel metric"><div class="value">&lt;60%</div><strong>Cobertura</strong><span>Líneas, ramas o funciones bajo umbral.</span></div>
+          <div class="panel metric"><div class="value">≥3</div><strong>Hotspots</strong><span>Módulos con múltiples issues en 14 días.</span></div>
+          <div class="panel metric"><div class="value">48h</div><strong>PRs paradas</strong><span>Horas laborables sin revisión.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">📣 Notificaciones</div>
+        <h2>Email y GitHub como canales operativos</h2>
+        <div class="grid two">
+          <div class="panel">
+            <strong>📧 Email</strong>
+            <p>Rechazos Q700, alertas diarias, release notes y avisos de documentación.</p>
+          </div>
+          <div class="panel">
+            <strong>🐙 GitHub</strong>
+            <p>Issues de rechazo, auditoría y tests débiles; PRs de código, docs y dependencias.</p>
+          </div>
+        </div>
+        <div class="flow">
+          <div class="node"><span class="icon">❌</span><b>Rechazo</b><small>Acción correctiva</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">🔧</span><b>Trabajo</b><small>Issue/PR</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">👀</span><b>Revisión</b><small>Stakeholders y devs</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><span class="icon">✅</span><b>Cierre</b><small>Changelog</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🔄 Ciclo completo</div>
+        <h2>Del DMS al aprendizaje continuo</h2>
+        <div class="cycle">
+          <div class="step"><b>1 📥 DMS</b><span>Incidencias abiertas</span></div>
+          <div class="step"><b>2 ✅ Validación</b><span>Schema + Q700</span></div>
+          <div class="step"><b>3 🎫 Issue</b><span>Cuerpo accionable</span></div>
+          <div class="step"><b>4 📊 Prioridad</b><span>Severidad e impacto</span></div>
+          <div class="step"><b>5 📚 Contexto</b><span>Knowledge Base</span></div>
+          <div class="step"><b>6 🤖 Agente</b><span>Implementación</span></div>
+          <div class="step"><b>7 🧪 Tests</b><span>Unitarios y cobertura</span></div>
+          <div class="step"><b>8 🚀 Deploy</b><span>Preview qdevweb</span></div>
+          <div class="step"><b>9 📘 Registro</b><span>Changelog y decisiones</span></div>
+          <div class="step"><b>10 📈 Mejora</b><span>Mutación, docs, deps</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">📊 Métricas</div>
+        <h2>Placeholder para datos reales de operación</h2>
+        <div class="grid four">
+          <div class="panel metric"><div class="value">--</div><strong>Issues procesadas</strong><span>Últimos 30 días</span></div>
+          <div class="panel metric"><div class="value">--</div><strong>PRs creadas</strong><span>Código, docs y deps</span></div>
+          <div class="panel metric"><div class="value">--</div><strong>Tiempo medio</strong><span>DMS → PR</span></div>
+          <div class="panel metric"><div class="value">--</div><strong>Alertas</strong><span>Seguridad y calidad</span></div>
+        </div>
+        <p class="lead">Siguientes fuentes: GitHub issues/PRs, `narobial-changelog`, logs systemd y reportes de coverage/Stryker.</p>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="content">
+        <div class="eyebrow">🧭 Próximos pasos</div>
+        <h2>Convertir operación autónoma en métricas gobernables</h2>
+        <div class="grid two">
+          <div class="panel"><strong>📐 Observabilidad</strong><span>Dashboard con throughput, tiempos, fallos por módulo y estado de timers.</span></div>
+          <div class="panel"><strong>🧠 Priorización avanzada</strong><span>Usar historial real, criticidad de cliente y señales de producción.</span></div>
+          <div class="panel"><strong>🔒 Hardening</strong><span>Secret rotation, límites de permisos y auditoría de comandos remotos.</span></div>
+          <div class="panel"><strong>📚 Knowledge Base 2.0</strong><span>Embeddings o búsqueda semántica para decisiones técnicas.</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="click-zone" aria-hidden="true">
+    <button type="button" data-dir="-1" tabindex="-1"></button>
+    <button type="button" data-dir="1" tabindex="-1"></button>
+  </div>
+
+  <div class="controls">
+    <button class="nav-btn" type="button" data-dir="-1" title="Anterior" aria-label="Anterior">←</button>
+    <div class="counter" id="counter">1 / 14</div>
+    <button class="nav-btn" type="button" data-dir="1" title="Siguiente" aria-label="Siguiente">→</button>
+  </div>
+  <div class="progress" aria-hidden="true"><span id="progress"></span></div>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const counter = document.getElementById("counter");
+    const progress = document.getElementById("progress");
+    let current = 0;
+
+    function show(index) {
+      const next = Math.max(0, Math.min(slides.length - 1, index));
+      slides.forEach((slide, i) => {
+        slide.classList.toggle("active", i === next);
+        slide.classList.toggle("previous", i < next);
+      });
+      current = next;
+      counter.textContent = `${current + 1} / ${slides.length}`;
+      progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+      history.replaceState(null, "", `#${current + 1}`);
+    }
+
+    function move(delta) {
+      show(current + delta);
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        move(1);
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        move(-1);
+      }
+      if (event.key === "Home") show(0);
+      if (event.key === "End") show(slides.length - 1);
+    });
+
+    document.querySelectorAll("[data-dir]").forEach((button) => {
+      button.addEventListener("click", () => move(Number(button.dataset.dir)));
+    });
+
+    const initial = Number(location.hash.replace("#", "")) - 1;
+    show(Number.isFinite(initial) && initial >= 0 ? initial : 0);
+  </script>
+</body>
+</html>

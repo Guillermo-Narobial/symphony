@@ -1,10 +1,10 @@
 [Unit]
-Description=Symphony weekly mutation testing runner
+Description=Symphony daily proactive alerts
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/npx tsx src/mutator.ts
+ExecStart=/usr/bin/npx tsx src/alerts.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
-TimeoutStartSec=2400
+TimeoutStartSec=600

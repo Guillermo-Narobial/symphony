@@ -1,0 +1,9 @@
+[Unit]
+Description=Symphony daily projects report
+
+[Timer]
+OnCalendar=*-*-* 08:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

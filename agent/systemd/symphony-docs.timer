@@ -1,0 +1,9 @@
+[Unit]
+Description=Symphony weekly documentation checker
+
+[Timer]
+OnCalendar=Wed *-*-* 07:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

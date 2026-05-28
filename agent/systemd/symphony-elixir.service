@@ -1,0 +1,17 @@
+[Unit]
+Description=Symphony Orchestrator (Elixir)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gcalleja
+WorkingDirectory=/home/gcalleja/code/symphony/elixir
+ExecStart=/home/gcalleja/.local/bin/mise exec -- ./bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails --port 4040 ../agent/WORKFLOW.md
+Restart=always
+RestartSec=10
+Environment=HOME=/home/gcalleja
+Environment=MIX_ENV=prod
+
+[Install]
+WantedBy=multi-user.target

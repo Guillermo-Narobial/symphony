@@ -1,0 +1,6 @@
+[Unit]
+Description=Reinicia Symphony Agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart symphony-agent.service
