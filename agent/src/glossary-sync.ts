@@ -12,6 +12,7 @@ const FRONTEND_DIR = resolve(process.env.GLOSSARY_FRONTEND_REPO_DIR ?? config.fr
 const TARGET_BRANCH = process.env.GLOSSARY_TARGET_BRANCH ?? "hotfix-master";
 const GLOSSARY_FILE = process.env.GLOSSARY_MARKDOWN_PATH ?? "docs/translation-glossary.md";
 const DMS_SERVER = process.env.GLOSSARY_DMS_SERVER ?? "master70";
+const DMS_SERVER_CODE = process.env.GLOSSARY_DMS_SERVER_CODE ?? config.dmsServerCode;
 const DMS_ENTITY = "GLOSARIO";
 const DMS_METHOD = "GET.GLOSARIO";
 const DMS_CUSTOM_INTERFACE = JSON.stringify({
@@ -85,7 +86,7 @@ async function fetchGlossary(): Promise<GlossaryTranslation[]> {
       metododms: DMS_METHOD,
       entidadDms: DMS_ENTITY,
       methodtype: "GET",
-      servercode: DMS_SERVER,
+      servercode: DMS_SERVER_CODE,
       headers: dmsHeaders(),
       custominterface: DMS_CUSTOM_INTERFACE,
     },
@@ -100,8 +101,25 @@ async function fetchGlossary(): Promise<GlossaryTranslation[]> {
     throw new Error(`DMS glossary error: ${res.status} ${res.statusText} ${body.slice(0, 500)}`);
   }
 
-  const data = await res.json() as { procedures?: RawGlossaryItem[]; data?: RawGlossaryItem[] };
-  const rows = Array.isArray(data.procedures) ? data.procedures : Array.isArray(data.data) ? data.data : [];
+  const data = await res.json() as {
+    error?: string;
+    message?: string;
+    code?: string;
+    procedures?: RawGlossaryItem[];
+    data?: RawGlossaryItem[];
+    glossary?: RawGlossaryItem[];
+  };
+  if (data.error || data.message || data.code) {
+    throw new Error(`DMS glossary error: ${data.code ?? "UNKNOWN"} ${data.error ?? ""} ${data.message ?? ""}`.trim());
+  }
+
+  const rows = Array.isArray(data.glossary)
+    ? data.glossary
+    : Array.isArray(data.procedures)
+      ? data.procedures
+      : Array.isArray(data.data)
+        ? data.data
+        : [];
   const normalized = normalizeGlossary(rows);
   if (normalized.length === 0) throw new Error("DMS glossary response did not contain translations");
   return normalized;
@@ -183,7 +201,7 @@ description: Glosario oficial DMS para traducciones de Narobial. Consultar siemp
 
 > Archivo generado automaticamente desde DMS. No editar a mano.
 
-- Origen DMS: servidor \`${DMS_SERVER}\`, entidad \`${DMS_ENTITY}\`, metodo \`${DMS_METHOD}\`
+- Origen DMS: servidor \`${DMS_SERVER}\`, servercode \`${DMS_SERVER_CODE}\`, entidad \`${DMS_ENTITY}\`, metodo \`${DMS_METHOD}\`
 - Custom interface: \`id\`, \`description\`, \`translations.language\`, \`translations.text\`
 - Ultima sincronizacion: \`${generatedAt}\`
 
