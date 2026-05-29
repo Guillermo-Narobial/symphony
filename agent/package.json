@@ -12,6 +12,7 @@
     "changelog": "tsx src/changelog-generator.ts",
     "alerts": "tsx src/alerts.ts",
     "health": "tsx src/health-monitor.ts",
+    "glossary:sync": "tsx src/glossary-sync.ts",
     "projects:report": "tsx src/projects-report.ts",
     "build": "tsc",
     "start": "node dist/index.js"

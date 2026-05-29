@@ -1,0 +1,10 @@
+[Unit]
+Description=Symphony DMS translation glossary sync
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npx tsx src/glossary-sync.ts
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
+TimeoutStartSec=600
