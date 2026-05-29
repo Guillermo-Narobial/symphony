@@ -1,0 +1,4 @@
+agent/.health-monitor-state.json
+agent/deps-checker.background.log
+agent/docs/agent-health.html
+agent/docs/agent-health.json
