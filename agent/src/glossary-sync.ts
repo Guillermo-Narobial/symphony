@@ -261,27 +261,39 @@ async function notifyFailure(error: unknown): Promise<void> {
 <p><strong>Archivo:</strong> ${GLOSSARY_FILE}</p>
 <pre>${escapeHtml(message)}</pre>`;
 
-  const transporter = nodemailer.createTransport({
-    host: "smtp-relay.gmail.com",
-    port: 465,
-    secure: true,
-  });
-
   try {
-    await transporter.sendMail({
-      from: "noreply@narobial.net",
-      to: PRIMARY_RECIPIENTS.join(", "),
-      subject,
-      html,
-    });
+    await sendMailWithRetry(PRIMARY_RECIPIENTS, subject, html);
   } catch {
-    await transporter.sendMail({
-      from: "noreply@narobial.net",
-      to: FALLBACK_RECIPIENTS.join(", "),
-      subject,
-      html,
-    });
+    await sendMailWithRetry(FALLBACK_RECIPIENTS, subject, html);
   }
+}
+
+async function sendMailWithRetry(recipients: string[], subject: string, html: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: "smtp-relay.gmail.com",
+        port: 465,
+        secure: true,
+      });
+      await transporter.sendMail({
+        from: "noreply@narobial.net",
+        to: recipients.join(", "),
+        subject,
+        html,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await sleep(5000 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
 function escapeHtml(value: string): string {
