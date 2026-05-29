@@ -73,6 +73,8 @@ Work only in the provided repository copy. Do not touch any other path.
 
 The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
 
+- If Codex hits a limit, classify it before retrying: account/time quota (`You've hit your usage limit`, `try again at <time>`, `limits reset`, `rate limit`, `quota`, `credits`) means stop all reattempts, preserve the workspace, update the workpad with the reset time if known, and resume only after reset; session/tab/context limit (`session limit`, `tab limit`, `conversation limit`, `context window`, `maximum context`, `start a new session`) means write `CODEX_HANDOFF.md` in the repo root with objective, branch/issue, git status, completed work, changed files, tests, blockers, pending tasks and a continuation prompt, update the workpad with that handoff note, then end the current session and resume from that file in a fresh Codex session without resetting or discarding changes.
+
 ## Default posture
 
 - Start by determining the ticket's current status, then follow the matching flow for that status.

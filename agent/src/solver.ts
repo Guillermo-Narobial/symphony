@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { AGENT_ENV } from "./agent-executor.js";
 import { config } from "./config.js";
+import { notifyAgentFailureEmail } from "./notifier-email.js";
 import { branchNameForIssue } from "./runner.js";
 import { runAgent } from "./runner.js";
 
@@ -214,6 +215,7 @@ function errorSummary(err: unknown): string {
 async function recordFailure(issue: GitHubIssue, err: unknown): Promise<void> {
   const attempt = retryAttempt(issue.labels) + 1;
   const retryAfter = new Date(Date.now() + retryDelayMs(attempt));
+  const summary = errorSummary(err);
 
   await removeLabel(issue.number, config.processingLabel);
   await ensureLabel(FAILED_LABEL, "D93F0B");
@@ -223,8 +225,12 @@ async function recordFailure(issue: GitHubIssue, err: unknown): Promise<void> {
   await exec("gh", [
     "issue", "comment", String(issue.number),
     "-R", config.repo,
-    "--body", `<!-- symphony-agent-failure attempt=${attempt} retryAfter=${retryAfter.toISOString()} -->\n❌ Symphony Agent falló en el intento ${attempt}/${config.maxAgentRetries}.\n\nReintento automático a partir de: ${retryAfter.toISOString()}\n\n\`\`\`text\n${errorSummary(err)}\n\`\`\``,
+    "--body", `<!-- symphony-agent-failure attempt=${attempt} retryAfter=${retryAfter.toISOString()} -->\n❌ Symphony Agent falló en el intento ${attempt}/${config.maxAgentRetries}.\n\nReintento automático a partir de: ${retryAfter.toISOString()}\n\n\`\`\`text\n${summary}\n\`\`\``,
   ], { env: AGENT_ENV, maxBuffer: 1024 * 1024 * 5 });
+
+  if (attempt >= config.maxAgentRetries) {
+    await notifyAgentFailureEmail(issue.number, issue.title, attempt, config.maxAgentRetries, summary);
+  }
 }
 
 async function clearFailureState(issueNumber: number): Promise<void> {
@@ -331,8 +337,10 @@ export async function solveIssues(): Promise<void> {
     addLabel(issue.number, config.processingLabel).catch(() => {});
 
     const baseBranch = issue.labels.includes("audit:weak-test") ? "release" : "hotfix-master";
+    const attempt = retryAttempt(issue.labels);
+    const forceCodex = config.solverCommand === "codex" || attempt >= config.maxKiroAttemptsBeforeCodex;
 
-    runAgent(issue.number, issue.title, issue.body, baseBranch)
+    runAgent(issue.number, issue.title, issue.body, baseBranch, forceCodex)
       .then(async () => {
         await clearFailureState(issue.number);
         console.log(`✅ Agente terminó #${issue.number}`);

@@ -184,6 +184,12 @@ cd narobial-changelog && git pull origin main
 - Crea archivo de decisión en \`decisiones/frontend/\`
 - Commit y push del changelog.
 
+## Protocolo ante limite de Codex
+
+- Si Codex falla por limite global de cuenta/tiempo (\`You've hit your usage limit\`, \`try again at <hora>\`, \`limits reset\`, \`rate limit\`, \`quota\`, \`credits\`), no reintentes en bucle: conserva el workspace y reporta la hora de reset si aparece.
+- Si Codex falla por limite de pestana/sesion/conversacion/contexto (\`session limit\`, \`tab limit\`, \`conversation limit\`, \`context window\`, \`maximum context\`, \`start a new session\`), crea \`CODEX_HANDOFF.md\` con objetivo, issue/rama, estado git, trabajo completado, archivos tocados, tests, bloqueos, pendientes y prompt de continuacion; termina la sesion actual para que otra sesion de Codex retome desde ese archivo.
+- No hagas \`git reset\`, no descartes cambios y no reinicies la tarea al cambiar de sesion.
+
 ## Restricciones
 
 - NO inventes nombres de componentes, rutas o endpoints que no existan en el código.
@@ -198,6 +204,7 @@ export async function runAgent(
   title: string,
   body: string,
   baseBranch: string,
+  forceCodex = false,
 ): Promise<void> {
   const branch = branchNameForIssue(issueNumber, title);
   const workDir = await prepareIssueWorkspace(issueNumber, baseBranch);
@@ -214,7 +221,7 @@ export async function runAgent(
   const prompt = buildPrompt(issueNumber, title, body, branch, baseBranch, kbContext);
 
   const result = await runAgentWithFallback(prompt, workDir, {
-    forceCodex: config.solverCommand === "codex",
+    forceCodex: config.solverCommand === "codex" || forceCodex,
   });
   console.log(`✅ Solver finalizado con ${result.solver}${result.usedFallback ? " (fallback)" : ""}`);
 
@@ -300,28 +307,30 @@ echo "$PORT"
   return port;
 }
 
-async function addDeployUrlToPr(branch: string, deployUrl: string): Promise<void> {
-  try {
-    const { stdout } = await exec("gh", [
-      "pr", "list",
-      "-R", config.repo,
-      "--head", branch,
-      "--json", "number,body",
-      "--limit", "1",
-    ], { env: AGENT_ENV });
-    const prs = JSON.parse(stdout) as Array<{ number: number; body: string }>;
-    if (!prs.length) return;
-
-    const pr = prs[0];
-    const deploySection = `\n\n## 🚀 Deploy de prueba\n\n🔗 ${deployUrl}`;
-
-    // Solo añadir si no está ya
-    if (pr.body.includes(deployUrl)) return;
-
-    const newBody = pr.body.replace(/\n\n## 🚀 Deploy de prueba\n\n🔗 .+/, "") + deploySection;
-    await exec("gh", ["pr", "edit", String(pr.number), "-R", config.repo, "--body", newBody], { env: AGENT_ENV });
-    console.log(`📝 PR #${pr.number} actualizada con URL de deploy: ${deployUrl}`);
-  } catch (err) {
-    console.warn("⚠️  No se pudo actualizar la PR con la URL de deploy:", err);
+export async function addDeployUrlToPr(branch: string, deployUrl: string): Promise<void> {
+  const [owner] = config.repo.split("/");
+  const head = encodeURIComponent(`${owner}:${branch}`);
+  const { stdout } = await exec("gh", [
+    "api",
+    `repos/${config.repo}/pulls?head=${head}&state=open&per_page=1`,
+  ], { env: AGENT_ENV });
+  const prs = JSON.parse(stdout) as Array<{ number: number; body: string | null }>;
+  if (!prs.length) {
+    throw new Error(`No se encontró una PR abierta para la rama ${branch}`);
   }
+
+  const pr = prs[0];
+  const currentBody = pr.body ?? "";
+  const deploySection = `\n\n## 🚀 Deploy de prueba\n\n🔗 ${deployUrl}`;
+
+  if (currentBody.includes(deployUrl)) return;
+
+  const newBody = currentBody.replace(/\n\n## 🚀 Deploy de prueba\n\n🔗 .+/, "") + deploySection;
+  await exec("gh", [
+    "api",
+    "-X", "PATCH",
+    `repos/${config.repo}/pulls/${pr.number}`,
+    "-f", `body=${newBody}`,
+  ], { env: AGENT_ENV });
+  console.log(`📝 PR #${pr.number} actualizada con URL de deploy: ${deployUrl}`);
 }

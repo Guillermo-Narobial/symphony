@@ -31,3 +31,31 @@ export async function notifyEmail(subject: string, html: string): Promise<void> 
     try { await transporter.sendMail({ ...mail, to: TO_FALLBACK }); } catch {}
   }
 }
+
+export async function notifyAgentFailureEmail(issueNumber: number, title: string, attempts: number, maxAttempts: number, reason: string): Promise<void> {
+  const subject = `❌ [Symphony] Issue #${issueNumber} agotó reintentos (${attempts}/${maxAttempts})`;
+  const html = `
+    <h2>Issue no resuelta automáticamente</h2>
+    <p><strong>Issue:</strong> #${issueNumber} — ${title}</p>
+    <p><strong>Intentos agotados:</strong> ${attempts}/${maxAttempts}</p>
+    <p><strong>Motivo final:</strong></p>
+    <pre>${reason}</pre>
+    <p>El agente ha dejado de relanzarla automáticamente hasta que se limpie su estado de reintentos.</p>
+  `;
+
+  await notifyEmail(subject, html);
+}
+
+export async function notifyAgentNoopEmail(issueNumber: number, title: string, attempts: number, maxAttempts: number, reason: string): Promise<void> {
+  const subject = `⚠️ [Symphony] Issue #${issueNumber} terminó sin cambios (${attempts}/${maxAttempts})`;
+  const html = `
+    <h2>Ejecución sin cambios detectada</h2>
+    <p><strong>Issue:</strong> #${issueNumber} — ${title}</p>
+    <p><strong>Intento actual:</strong> ${attempts}/${maxAttempts}</p>
+    <p><strong>Clasificación:</strong> el agente leyó la issue pero no materializó cambios, no encontró corrección clara, devolvió una salida vacía/no-op o el solver terminó sin tocar archivos.</p>
+    <p><strong>Detalle técnico:</strong></p>
+    <pre>${reason}</pre>
+  `;
+
+  await notifyEmail(subject, html);
+}

@@ -64,6 +64,7 @@ This is an Angular project with two active branches:
 9. Push: `git push -u origin <branch>`.
 10. Create PR: `gh pr create --base <base-branch> --assignee Guillermo-Narobial --title "<branch-name>" --body "Resuelve #<issue-number>"`.
 11. Add label `en-revision` to the issue.
+12. If Codex hits a limit, classify it before retrying: account/time quota (`You've hit your usage limit`, `try again at <time>`, `limits reset`, `rate limit`, `quota`, `credits`) means stop all reattempts, preserve the workspace, and resume only after the stated reset time; session/tab/context limit (`session limit`, `tab limit`, `conversation limit`, `context window`, `maximum context`, `start a new session`) means write `CODEX_HANDOFF.md` in the repo root with objective, branch/issue, git status, completed work, changed files, tests, blockers, pending tasks and a continuation prompt, then end the current session and resume from that file in a fresh Codex session without resetting or discarding changes.
 
 ## Commit format
 

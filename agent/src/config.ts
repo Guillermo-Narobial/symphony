@@ -35,7 +35,8 @@ export const config = {
   frontendRepoDir: env("FRONTEND_REPO_DIR", "./repos/Narobial-Frontend"),
   agentWorkspacesDir: env("AGENT_WORKSPACES_DIR", "./repos"),
   maxConcurrentAgents: Number(env("MAX_CONCURRENT_AGENTS", "3")),
-  maxAgentRetries: Number(env("MAX_AGENT_RETRIES", "3")),
+  maxAgentRetries: Number(env("MAX_AGENT_RETRIES", "10")),
+  maxKiroAttemptsBeforeCodex: Number(env("MAX_KIRO_ATTEMPTS_BEFORE_CODEX", "3")),
   solverCommand: env("SOLVER_COMMAND", "kiro"),
   processingLabel: env("PROCESSING_LABEL", "agente-trabajando"),
 

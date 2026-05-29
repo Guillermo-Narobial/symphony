@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { AGENT_ENV, runAgentWithFallback } from "./agent-executor.js";
 import { config } from "./config.js";
-import { branchNameForIssue, installDependencies, prepareExistingBranchWorkspace } from "./runner.js";
+import { addDeployUrlToPr, branchNameForIssue, installDependencies, prepareExistingBranchWorkspace } from "./runner.js";
 
 const exec = promisify(execFile);
 const MAX_KIRO_ATTEMPTS = 3;
@@ -191,6 +191,12 @@ gh issue comment ${issueNumber} --repo ${config.repo} --body "✅ Correcciones a
 
 **NUNCA olvides este paso. Siempre hay que notificar en la issue después de pushear.**
 
+## Protocolo ante limite de Codex
+
+- Si Codex falla por limite global de cuenta/tiempo (\`You've hit your usage limit\`, \`try again at <hora>\`, \`limits reset\`, \`rate limit\`, \`quota\`, \`credits\`), no reintentes en bucle: conserva el workspace y reporta la hora de reset si aparece.
+- Si Codex falla por limite de pestana/sesion/conversacion/contexto (\`session limit\`, \`tab limit\`, \`conversation limit\`, \`context window\`, \`maximum context\`, \`start a new session\`), crea \`CODEX_HANDOFF.md\` con objetivo, issue/rama, estado git, trabajo completado, archivos tocados, tests, bloqueos, pendientes y prompt de continuacion; termina la sesion actual para que otra sesion de Codex retome desde ese archivo.
+- No hagas \`git reset\`, no descartes cambios y no reinicies la tarea al cambiar de sesion.
+
 ## Restricciones
 
 - NO hagas cambios fuera del alcance del feedback.
@@ -322,6 +328,7 @@ echo "$PORT"
   if (port) {
     const deployUrl = `https://${config.deployHost}:${port}`;
     console.log(`✅ Deploy: ${deployUrl}`);
+    await addDeployUrlToPr(branch, deployUrl);
 
     // Email
     try {
