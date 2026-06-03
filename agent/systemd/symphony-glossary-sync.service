@@ -3,8 +3,12 @@ Description=Symphony DMS translation glossary sync
 
 [Service]
 Type=oneshot
+User=gcalleja
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/gcalleja
+Environment=GIT_CONFIG_GLOBAL=/home/gcalleja/.gitconfig
+Environment=GIT_SSH_COMMAND=ssh -i /home/gcalleja/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new
 ExecStart=/usr/bin/npx tsx src/glossary-sync.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
 TimeoutStartSec=600
