@@ -13,6 +13,7 @@ const LABEL = "audit:weak-test";
 const ASSIGNEE = config.rejectAssignee;
 const WORK_DIR = resolve(config.frontendRepoDir);
 const SURVIVAL_THRESHOLD = 3;
+const CONCURRENCY = 4;
 
 interface Mutant {
   file: string;
@@ -30,7 +31,6 @@ interface FileResult {
   survivors: Mutant[];
 }
 
-// Mutaciones simples pero efectivas
 const MUTATIONS: Array<{ type: string; pattern: RegExp; replace: string }> = [
   { type: "BooleanNegate", pattern: /\btrue\b/g, replace: "false" },
   { type: "BooleanNegate", pattern: /\bfalse\b/g, replace: "true" },
@@ -48,7 +48,6 @@ function generateMutants(source: string, file: string): Mutant[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Skip imports, comments, decorators, specs
     if (/^\s*(import|\/\/|\/\*|\*|@)/.test(line)) continue;
     if (/\.spec\./.test(file)) continue;
 
@@ -64,33 +63,29 @@ function generateMutants(source: string, file: string): Mutant[] {
     }
   }
 
-  // Limitar a 20 mutantes por archivo para no tardar horas
   return mutants.slice(0, 20);
 }
 
-async function testMutant(mutant: Mutant): Promise<boolean> {
+async function testMutant(mutant: Mutant): Promise<boolean | null> {
   const filePath = resolve(WORK_DIR, mutant.file);
-  const original = await readFile(filePath, "utf-8");
+  let original: string;
+  try { original = await readFile(filePath, "utf-8"); } catch { return null; }
+
   const lines = original.split("\n");
-  // Aplicar mutación
   lines[mutant.line - 1] = lines[mutant.line - 1].replace(mutant.original, mutant.mutated);
-  await writeFile(filePath, lines.join("\n"));
+  try { await writeFile(filePath, lines.join("\n")); } catch { return null; }
 
   try {
-    // Ejecutar tests relacionados
     const specFile = mutant.file.replace(/\.ts$/, ".spec.ts");
-    await exec("npx", ["vitest", "run", "--config", "vitest.stryker.config.ts", specFile], {
+    await exec("npx", ["vitest", "run", "--config", "vitest.config.ts", specFile], {
       cwd: WORK_DIR,
       timeout: 30_000,
       maxBuffer: 10 * 1024 * 1024,
     });
-    // Tests pasaron con mutante → mutante sobrevivió (test débil)
     return true;
   } catch {
-    // Tests fallaron → mutante detectado (test robusto)
     return false;
   } finally {
-    // Restaurar archivo original
     await writeFile(filePath, original);
   }
 }
@@ -112,19 +107,44 @@ async function processFile(specFile: string): Promise<FileResult | null> {
 
   console.log(`  🧬 ${sourceFile}: ${mutants.length} mutantes...`);
 
+  // Mutants dentro de un mismo archivo se ejecutan en serie (comparten el fichero)
   let survived = 0;
   const survivors: Mutant[] = [];
 
   for (const mutant of mutants) {
     const didSurvive = await testMutant(mutant);
-    if (didSurvive) {
-      survived++;
-      survivors.push(mutant);
-    }
+    if (didSurvive === null) return null;
+    if (didSurvive) { survived++; survivors.push(mutant); }
   }
 
   const score = Math.round(((mutants.length - survived) / mutants.length) * 100);
   return { file: sourceFile, total: mutants.length, survived, score, survivors };
+}
+
+// Procesa N archivos en paralelo con pool de workers
+async function runPool(specFiles: string[]): Promise<FileResult[]> {
+  const weakFiles: FileResult[] = [];
+  let idx = 0;
+
+  async function worker(): Promise<void> {
+    while (idx < specFiles.length) {
+      const i = idx++;
+      const spec = specFiles[i];
+      console.log(`\n📂 [${i + 1}/${specFiles.length}] ${spec}`);
+      try {
+        const result = await processFile(spec);
+        if (result && result.survived >= SURVIVAL_THRESHOLD) {
+          weakFiles.push(result);
+          console.log(`  ⚠️  ${result.file}: score ${result.score}% (${result.survived} sobrevivieron)`);
+        }
+      } catch (err) {
+        console.log(`  ⏭️  Error procesando ${spec}, skip: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+  return weakFiles;
 }
 
 async function ensureLabel(): Promise<void> {
@@ -155,29 +175,17 @@ async function createIssues(results: FileResult[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log("🧬 Mutation testing periódico — inicio");
+  console.log("🧬 Mutation testing — inicio (4 workers)");
 
   // Sync repo
   await exec("git", ["fetch", "origin"], { cwd: WORK_DIR });
   await exec("git", ["checkout", "hotfix-master"], { cwd: WORK_DIR });
   await exec("git", ["pull", "origin", "hotfix-master", "--ff-only"], { cwd: WORK_DIR });
 
-  // Encontrar archivos con specs
   const specFiles = await findSpecFiles();
   console.log(`📋 ${specFiles.length} archivos con tests encontrados`);
 
-  const weakFiles: FileResult[] = [];
-
-  for (let i = 0; i < specFiles.length; i++) {
-    const spec = specFiles[i];
-    console.log(`\n📂 [${i + 1}/${specFiles.length}] ${spec}`);
-    const result = await processFile(spec);
-    if (result && result.survived >= SURVIVAL_THRESHOLD) {
-      weakFiles.push(result);
-      console.log(`  ⚠️  ${result.file}: score ${result.score}% (${result.survived} sobrevivieron)`);
-    }
-  }
-
+  const weakFiles = await runPool(specFiles);
   weakFiles.sort((a, b) => a.score - b.score);
 
   // Guardar reporte JSON
