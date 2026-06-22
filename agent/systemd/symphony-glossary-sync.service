@@ -3,7 +3,6 @@ Description=Symphony DMS translation glossary sync
 
 [Service]
 Type=oneshot
-User=gcalleja
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/gcalleja

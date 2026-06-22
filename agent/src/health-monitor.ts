@@ -289,7 +289,6 @@ async function main(): Promise<void> {
   const [services, processingIssues, failedIssues, openPullRequests] = await Promise.all([
     Promise.all([
       systemctlIsActive("symphony-agent.service"),
-      systemctlIsActive("symphony-elixir.service"),
     ]),
     fetchIssues(config.processingLabel),
     fetchIssues("agent-failed"),

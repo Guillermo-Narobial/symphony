@@ -14,6 +14,7 @@ const ASSIGNEE = config.rejectAssignee;
 const WORK_DIR = resolve(config.frontendRepoDir);
 const SURVIVAL_THRESHOLD = 3;
 const CONCURRENCY = 4;
+const PROGRESS_PATH = process.env.MUTATOR_PROGRESS_PATH;
 
 interface Mutant {
   file: string;
@@ -31,6 +32,34 @@ interface FileResult {
   survivors: Mutant[];
 }
 
+interface SkipSpec {
+  spec: string;
+  code: string;
+  reason: string;
+}
+
+interface ProgressState {
+  startedAt: string;
+  updatedAt: string;
+  workDir: string;
+  totalSpecs: number;
+  processedSpecs: string[];
+  weakFiles: FileResult[];
+  borderlineFiles: FileResult[];
+  skippedSpecs: SkipSpec[];
+  noMutantsSpecs: string[];
+  currentSpecs: string[];
+}
+
+type MutantTestResult =
+  | { kind: "survived" | "killed" }
+  | { kind: "skip"; code: string; reason: string };
+
+type ProcessResult =
+  | { kind: "result"; result: FileResult }
+  | { kind: "no-mutants" }
+  | { kind: "skipped"; code: string; reason: string };
+
 const MUTATIONS: Array<{ type: string; pattern: RegExp; replace: string }> = [
   { type: "BooleanNegate", pattern: /\btrue\b/g, replace: "false" },
   { type: "BooleanNegate", pattern: /\bfalse\b/g, replace: "true" },
@@ -41,6 +70,53 @@ const MUTATIONS: Array<{ type: string; pattern: RegExp; replace: string }> = [
   { type: "EmptyString", pattern: /'[^']+'/g, replace: "''" },
   { type: "ZeroNumber", pattern: /(?<![a-zA-Z_$])\d+(?!\d*[a-zA-Z_$])/g, replace: "0" },
 ];
+
+function uniqueByFile(results: FileResult[]): FileResult[] {
+  const byFile = new Map<string, FileResult>();
+  for (const result of results) byFile.set(result.file, result);
+  return [...byFile.values()];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function uniqueSkips(skips: SkipSpec[]): SkipSpec[] {
+  const bySpec = new Map<string, SkipSpec>();
+  for (const skip of skips) bySpec.set(skip.spec, skip);
+  return [...bySpec.values()].sort((a, b) => a.spec.localeCompare(b.spec));
+}
+
+async function loadProgress(): Promise<ProgressState | null> {
+  if (!PROGRESS_PATH) return null;
+  try {
+    const raw = await readFile(PROGRESS_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as ProgressState;
+    if (parsed.workDir !== WORK_DIR) return null;
+    return {
+      ...parsed,
+      processedSpecs: parsed.processedSpecs ?? [],
+      weakFiles: parsed.weakFiles ?? [],
+      borderlineFiles: parsed.borderlineFiles ?? [],
+      skippedSpecs: parsed.skippedSpecs ?? [],
+      noMutantsSpecs: parsed.noMutantsSpecs ?? [],
+      currentSpecs: parsed.currentSpecs ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveProgress(progress: ProgressState): Promise<void> {
+  if (!PROGRESS_PATH) return;
+  await mkdir(dirname(PROGRESS_PATH), { recursive: true });
+  progress.updatedAt = new Date().toISOString();
+  progress.weakFiles = uniqueByFile(progress.weakFiles).sort((a, b) => a.score - b.score);
+  progress.borderlineFiles = uniqueByFile(progress.borderlineFiles).sort((a, b) => a.score - b.score);
+  progress.skippedSpecs = uniqueSkips(progress.skippedSpecs);
+  progress.noMutantsSpecs = uniqueStrings(progress.noMutantsSpecs);
+  await writeFile(PROGRESS_PATH, JSON.stringify(progress, null, 2));
+}
 
 function generateMutants(source: string, file: string): Mutant[] {
   const lines = source.split("\n");
@@ -66,28 +142,55 @@ function generateMutants(source: string, file: string): Mutant[] {
   return mutants.slice(0, 20);
 }
 
-async function testMutant(mutant: Mutant): Promise<boolean | null> {
+async function testMutant(mutant: Mutant): Promise<MutantTestResult> {
   const filePath = resolve(WORK_DIR, mutant.file);
   let original: string;
-  try { original = await readFile(filePath, "utf-8"); } catch { return null; }
+  try {
+    original = await readFile(filePath, "utf-8");
+  } catch (error) {
+    return {
+      kind: "skip",
+      code: "mutant-read-error",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   const lines = original.split("\n");
   lines[mutant.line - 1] = lines[mutant.line - 1].replace(mutant.original, mutant.mutated);
-  try { await writeFile(filePath, lines.join("\n")); } catch { return null; }
+  try {
+    await writeFile(filePath, lines.join("\n"));
+  } catch (error) {
+    return {
+      kind: "skip",
+      code: "write-mutant-error",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 
+  let outcome: MutantTestResult;
   try {
     const specFile = mutant.file.replace(/\.ts$/, ".spec.ts");
     await exec("npx", ["vitest", "run", "--config", "vitest.config.ts", specFile], {
       cwd: WORK_DIR,
-      timeout: 30_000,
+      timeout: 90_000,
       maxBuffer: 10 * 1024 * 1024,
     });
-    return true;
+    outcome = { kind: "survived" };
   } catch {
-    return false;
+    outcome = { kind: "killed" };
   } finally {
-    await writeFile(filePath, original);
+    try {
+      await writeFile(filePath, original);
+    } catch (error) {
+      outcome = {
+        kind: "skip",
+        code: "restore-source-error",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
+
+  return outcome;
 }
 
 async function findSpecFiles(): Promise<string[]> {
@@ -95,56 +198,102 @@ async function findSpecFiles(): Promise<string[]> {
   return stdout.trim().split("\n").filter(Boolean);
 }
 
-async function processFile(specFile: string): Promise<FileResult | null> {
+async function processFile(specFile: string): Promise<ProcessResult> {
   const sourceFile = specFile.replace(".spec.ts", ".ts");
   const sourcePath = resolve(WORK_DIR, sourceFile);
 
   let source: string;
-  try { source = await readFile(sourcePath, "utf-8"); } catch { return null; }
+  try {
+    source = await readFile(sourcePath, "utf-8");
+  } catch (error) {
+    return {
+      kind: "skipped",
+      code: "missing-source-file",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   const mutants = generateMutants(source, sourceFile);
-  if (mutants.length === 0) return null;
+  if (mutants.length === 0) return { kind: "no-mutants" };
 
   console.log(`  🧬 ${sourceFile}: ${mutants.length} mutantes...`);
 
-  // Mutants dentro de un mismo archivo se ejecutan en serie (comparten el fichero)
   let survived = 0;
   const survivors: Mutant[] = [];
 
   for (const mutant of mutants) {
-    const didSurvive = await testMutant(mutant);
-    if (didSurvive === null) return null;
-    if (didSurvive) { survived++; survivors.push(mutant); }
+    const mutantResult = await testMutant(mutant);
+    if (mutantResult.kind === "skip") {
+      return { kind: "skipped", code: mutantResult.code, reason: mutantResult.reason };
+    }
+    if (mutantResult.kind === "survived") {
+      survived++;
+      survivors.push(mutant);
+    }
   }
 
   const score = Math.round(((mutants.length - survived) / mutants.length) * 100);
-  return { file: sourceFile, total: mutants.length, survived, score, survivors };
+  return { kind: "result", result: { file: sourceFile, total: mutants.length, survived, score, survivors } };
 }
 
-// Procesa N archivos en paralelo con pool de workers
-async function runPool(specFiles: string[]): Promise<FileResult[]> {
-  const weakFiles: FileResult[] = [];
+async function runPool(specFiles: string[], progress: ProgressState): Promise<{ weakFiles: FileResult[]; borderlineFiles: FileResult[] }> {
+  const weakFiles = [...progress.weakFiles];
+  const borderlineFiles = [...progress.borderlineFiles];
+  const processed = new Set(progress.processedSpecs);
+  const pendingSpecs = specFiles.filter((spec) => !processed.has(spec));
   let idx = 0;
 
+  async function markCurrent(spec: string, active: boolean): Promise<void> {
+    const current = new Set(progress.currentSpecs);
+    if (active) current.add(spec);
+    else current.delete(spec);
+    progress.currentSpecs = [...current].sort();
+    await saveProgress(progress);
+  }
+
   async function worker(): Promise<void> {
-    while (idx < specFiles.length) {
+    while (idx < pendingSpecs.length) {
       const i = idx++;
-      const spec = specFiles[i];
-      console.log(`\n📂 [${i + 1}/${specFiles.length}] ${spec}`);
+      const spec = pendingSpecs[i];
+      const absoluteIndex = specFiles.indexOf(spec) + 1;
+
+      console.log(`\n📂 [${absoluteIndex}/${specFiles.length}] ${spec}`);
+      await markCurrent(spec, true);
+
       try {
         const result = await processFile(spec);
-        if (result && result.survived >= SURVIVAL_THRESHOLD) {
-          weakFiles.push(result);
-          console.log(`  ⚠️  ${result.file}: score ${result.score}% (${result.survived} sobrevivieron)`);
+        if (result.kind === "result" && result.result.survived >= SURVIVAL_THRESHOLD) {
+          weakFiles.push(result.result);
+          progress.weakFiles = uniqueByFile(weakFiles);
+          console.log(`  ⚠️  ${result.result.file}: score ${result.result.score}% (${result.result.survived} sobrevivieron)`);
+        } else if (result.kind === "result" && result.result.survived > 0) {
+          borderlineFiles.push(result.result);
+          progress.borderlineFiles = uniqueByFile(borderlineFiles);
+          console.log(`  ℹ️  ${result.result.file}: ${result.result.survived} mutantes sobrevivieron pero queda bajo el umbral`);
+        } else if (result.kind === "no-mutants") {
+          progress.noMutantsSpecs.push(spec);
+          console.log(`  ℹ️  ${spec}: sin mutantes generados`);
+        } else if (result.kind === "skipped") {
+          progress.skippedSpecs.push({ spec, code: result.code, reason: result.reason });
+          console.log(`  ⏭️  Skip ${spec}: [${result.code}] ${result.reason}`);
         }
       } catch (err) {
-        console.log(`  ⏭️  Error procesando ${spec}, skip: ${(err as Error).message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        progress.skippedSpecs.push({ spec, code: "processing-error", reason: message });
+        console.log(`  ⏭️  Error procesando ${spec}, skip: ${message}`);
+      } finally {
+        processed.add(spec);
+        progress.processedSpecs = [...processed].sort();
+        await markCurrent(spec, false);
       }
     }
   }
 
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
-  return weakFiles;
+  return {
+    weakFiles: uniqueByFile(weakFiles).sort((a, b) => a.score - b.score),
+    borderlineFiles: uniqueByFile(borderlineFiles).sort((a, b) => a.score - b.score),
+  };
 }
 
 async function ensureLabel(): Promise<void> {
@@ -177,40 +326,88 @@ async function createIssues(results: FileResult[]): Promise<void> {
 async function main(): Promise<void> {
   console.log("🧬 Mutation testing — inicio (4 workers)");
 
-  // Sync repo
   await exec("git", ["fetch", "origin"], { cwd: WORK_DIR });
   await exec("git", ["checkout", "hotfix-master"], { cwd: WORK_DIR });
+  await exec("git", ["reset", "--hard", "HEAD"], { cwd: WORK_DIR });
+  await exec("git", ["clean", "-fd"], { cwd: WORK_DIR });
   await exec("git", ["pull", "origin", "hotfix-master", "--ff-only"], { cwd: WORK_DIR });
 
   const specFiles = await findSpecFiles();
+  const existingProgress = await loadProgress();
+  const progress: ProgressState = existingProgress ?? {
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    workDir: WORK_DIR,
+    totalSpecs: specFiles.length,
+    processedSpecs: [],
+    weakFiles: [],
+    borderlineFiles: [],
+    skippedSpecs: [],
+    noMutantsSpecs: [],
+    currentSpecs: [],
+  };
+
+  progress.totalSpecs = specFiles.length;
+  progress.currentSpecs = [];
+  await saveProgress(progress);
+
+  const completed = progress.processedSpecs.length;
   console.log(`📋 ${specFiles.length} archivos con tests encontrados`);
+  if (completed > 0) {
+    console.log(`♻️  Reanudando desde checkpoint: ${completed}/${specFiles.length} specs ya procesados`);
+  }
 
-  const weakFiles = await runPool(specFiles);
-  weakFiles.sort((a, b) => a.score - b.score);
+  const { weakFiles, borderlineFiles } = await runPool(specFiles, progress);
+  progress.weakFiles = weakFiles;
+  progress.borderlineFiles = borderlineFiles;
+  progress.currentSpecs = [];
+  await saveProgress(progress);
 
-  // Guardar reporte JSON
   const reportPath = resolve(WORK_DIR, "reports/mutation/mutation.json");
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ date: new Date().toISOString(), total: specFiles.length, weak: weakFiles.length, results: weakFiles }, null, 2));
+  await writeFile(reportPath, JSON.stringify({
+    date: new Date().toISOString(),
+    total: specFiles.length,
+    weak: weakFiles.length,
+    borderline: borderlineFiles.length,
+    noMutants: progress.noMutantsSpecs.length,
+    skipped: progress.skippedSpecs,
+    results: weakFiles,
+    borderlineResults: borderlineFiles,
+    noMutantsSpecs: progress.noMutantsSpecs,
+  }, null, 2));
   console.log(`💾 Reporte guardado en ${reportPath}`);
 
   console.log(`\n📊 ${weakFiles.length} archivos con tests débiles (≥${SURVIVAL_THRESHOLD} mutantes)`);
+  if (borderlineFiles.length > 0) {
+    console.log(`ℹ️  ${borderlineFiles.length} archivos tienen 1-${SURVIVAL_THRESHOLD - 1} mutantes sobrevivientes`);
+  }
+  if (progress.noMutantsSpecs.length > 0) {
+    console.log(`ℹ️  ${progress.noMutantsSpecs.length} specs no generaron mutantes`);
+  }
+  if (progress.skippedSpecs.length > 0) {
+    console.log(`⏭️  ${progress.skippedSpecs.length} specs se marcaron como skip por error`);
+  }
 
-  if (weakFiles.length === 0) {
-    console.log("🎉 Todos los tests son robustos");
+  if (weakFiles.length === 0 && borderlineFiles.length === 0 && progress.skippedSpecs.length === 0) {
+    console.log("🎉 No se detectaron tests débiles ni ejecuciones omitidas");
     await notifyEmail(
       `🧬 [Symphony] Mutation testing completado — ${new Date().toISOString().slice(0, 10)}`,
-      `<h2>🧬 Mutation testing completado</h2><p>🎉 Todos los tests son robustos. ${specFiles.length} archivos analizados, 0 débiles.</p>`
+      `<h2>🧬 Mutation testing completado</h2><p>No se detectaron archivos débiles ni specs omitidos.</p><p><strong>Analizados:</strong> ${specFiles.length}</p><p><strong>Borderline:</strong> ${borderlineFiles.length}</p><p><strong>Sin mutantes:</strong> ${progress.noMutantsSpecs.length}</p>`
     );
     return;
   }
 
-  await createIssues(weakFiles);
+  if (weakFiles.length > 0) {
+    await createIssues(weakFiles);
+  }
 
   const summary = weakFiles.slice(0, 10).map(r => `<li><code>${r.file}</code> — ${r.score}% (${r.survived} mutantes sobrevivieron)</li>`).join("");
+  const borderlineSummary = borderlineFiles.slice(0, 10).map(r => `<li><code>${r.file}</code> — ${r.survived} mutantes sobrevivieron</li>`).join("");
+  const skipSummary = progress.skippedSpecs.slice(0, 10).map(s => `<li><code>${s.spec}</code> — [${s.code}] ${s.reason}</li>`).join("");
   await notifyEmail(
-    `🧬 [Symphony] Mutation testing — ${weakFiles.length} archivos débiles`,
-    `<h2>🧬 Mutation testing completado</h2><p>${specFiles.length} archivos analizados, ${weakFiles.length} con tests débiles:</p><ul>${summary}</ul>`
+    `🧬 [Symphony] Mutation testing — ${weakFiles.length} débiles, ${borderlineFiles.length} borderline, ${progress.skippedSpecs.length} skip`,
+    `<h2>🧬 Mutation testing completado</h2><p><strong>Analizados:</strong> ${specFiles.length}</p><p><strong>Débiles:</strong> ${weakFiles.length}</p><p><strong>Borderline:</strong> ${borderlineFiles.length}</p><p><strong>Sin mutantes:</strong> ${progress.noMutantsSpecs.length}</p><p><strong>Skip:</strong> ${progress.skippedSpecs.length}</p>${summary ? `<h3>Débiles</h3><ul>${summary}</ul>` : ""}${borderlineSummary ? `<h3>Borderline</h3><ul>${borderlineSummary}</ul>` : ""}${skipSummary ? `<h3>Skip</h3><ul>${skipSummary}</ul>` : ""}`
   );
 
   console.log("🏁 Mutation testing completado");

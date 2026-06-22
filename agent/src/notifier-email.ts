@@ -7,8 +7,8 @@ const transporter = nodemailer.createTransport({
 });
 
 const FROM = "noreply@narobial.net";
-const TO_PRIMARY = "guillermo.calleja@narobial.net";
-const TO_FALLBACK = "guillermo.calleja@quiter.com";
+const TO_PRIMARY = "guillermo.calleja@quiter.com";
+const TO_FALLBACK = "guillermo.calleja@narobial.net";
 
 export async function notifyRejectionEmail(taskId: string, reason: string): Promise<void> {
   const mail = {
