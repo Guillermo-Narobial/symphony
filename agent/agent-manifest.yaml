@@ -1,7 +1,7 @@
 # Central operational defaults for Symphony Agent.
 # Environment variables in .env still take precedence for deployment-specific values.
 agent:
-  max_concurrent_agents: 3
+  max_concurrent_agents: 1
   max_agent_retries: 10
   max_kiro_attempts_before_codex: 3
   processing_label: agente-trabajando

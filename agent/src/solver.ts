@@ -360,7 +360,8 @@ async function collectEligibleIssues(issues: GitHubIssue[], openPrs: OpenPr[]): 
 }
 
 function selectIssueBatch(eligible: GitHubIssue[], allIssues: GitHubIssue[]): ScoredIssue[] {
-  const slots = config.maxConcurrentAgents - running.size;
+  // A single functional worker avoids concurrent deploys and workspace contention.
+  const slots = Math.min(1, config.maxConcurrentAgents) - running.size;
   return eligible
     .map((issue) => ({ issue, score: priorityScore(issue, allIssues) }))
     .sort((a, b) => b.score - a.score)
