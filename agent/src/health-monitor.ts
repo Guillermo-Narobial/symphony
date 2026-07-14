@@ -36,6 +36,7 @@ interface ServiceHealth {
   name: string;
   active: boolean;
   status: string;
+  enabledStatus: string;
 }
 
 interface HealthAlert {
@@ -55,13 +56,21 @@ interface HealthSnapshot {
 }
 
 async function systemctlIsActive(service: string): Promise<ServiceHealth> {
+  let enabledStatus = "unknown";
+  try {
+    const { stdout } = await exec("systemctl", ["is-enabled", service], { env: AGENT_ENV });
+    enabledStatus = stdout.trim();
+  } catch (err: any) {
+    enabledStatus = String(err.stdout || err.message || "unknown").trim();
+  }
+
   try {
     const { stdout } = await exec("systemctl", ["is-active", service], { env: AGENT_ENV });
     const status = stdout.trim();
-    return { name: service, active: status === "active", status };
+    return { name: service, active: status === "active", status, enabledStatus };
   } catch (err: any) {
     const status = String(err.stdout || err.message || "unknown").trim();
-    return { name: service, active: false, status };
+    return { name: service, active: false, status, enabledStatus };
   }
 }
 
@@ -139,7 +148,7 @@ function buildAlerts(snapshot: Omit<HealthSnapshot, "alerts">): HealthAlert[] {
     if (!service.active) {
       alerts.push({
         title: `${service.name} no está activo`,
-        detail: `Estado systemd: ${service.status}`,
+        detail: `Estado systemd: ${service.status}; habilitacion: ${service.enabledStatus}`,
       });
     }
   }
@@ -187,7 +196,7 @@ function renderIssueRows(issues: Issue[]): string {
 
 function renderDashboard(snapshot: HealthSnapshot): string {
   const serviceItems = snapshot.services.map((service) => `
-    <li class="${service.active ? "ok" : "bad"}">${escapeHtml(service.name)}: ${escapeHtml(service.status)}</li>
+    <li class="${service.active ? "ok" : "bad"}">${escapeHtml(service.name)}: ${escapeHtml(service.status)} (${escapeHtml(service.enabledStatus)})</li>
   `).join("");
   const alertItems = snapshot.alerts.length === 0
     ? "<li class=\"ok\">Sin alertas activas</li>"

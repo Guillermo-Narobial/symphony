@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { AGENT_ENV } from "./agent-executor.js";
 import { config } from "./config.js";
 import { notifyAgentFailureEmail } from "./notifier-email.js";
+import { formatRouterDecision, routeIssue, type RouterDecision } from "./llm-router.js";
 import { branchNameForIssue } from "./runner.js";
 import { runAgent } from "./runner.js";
 
@@ -29,11 +30,24 @@ interface FailureRetryState {
   retryAfter: Date;
 }
 
+interface ScoredIssue {
+  issue: GitHubIssue;
+  score: number;
+}
+
+interface AgentLaunchPlan extends ScoredIssue {
+  baseBranch: string;
+  forceCodex: boolean;
+  previousFailureContext: string;
+  routerDecision: RouterDecision;
+}
+
 const running = new Set<number>();
 const FAILED_LABEL = "agent-failed";
 const RETRY_LABEL_PREFIX = "agent-retry:";
 const FAILURE_MARKER_RE = /<!-- symphony-agent-failure attempt=(\d+) retryAfter=([^\s]+) -->/;
 const BRANCH_CLEANUP_INTERVAL_MS = 6 * 60 * 60_000;
+const QUOTA_RETRY_DELAY_MS = 10 * 60 * 60_000;
 let lastBranchCleanupAt = 0;
 
 async function fetchOpenIssues(label?: string): Promise<GitHubIssue[]> {
@@ -212,23 +226,52 @@ function errorSummary(err: unknown): string {
   return message.length <= 2_000 ? message : `${message.slice(0, 2_000)}\n... (truncado)`;
 }
 
+function isQuotaFailure(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+  const normalized = message.toLowerCase();
+  return normalized.includes("out of credits")
+    || normalized.includes("workspace owner to refill")
+    || normalized.includes("account/time quota")
+    || normalized.includes("usage limit")
+    || normalized.includes("limits reset")
+    || normalized.includes("rate limit")
+    || normalized.includes("quota")
+    || normalized.includes("credits");
+}
+
 async function recordFailure(issue: GitHubIssue, err: unknown): Promise<void> {
-  const attempt = retryAttempt(issue.labels) + 1;
-  const retryAfter = new Date(Date.now() + retryDelayMs(attempt));
+  const quotaFailure = isQuotaFailure(err);
+  const currentAttempt = retryAttempt(issue.labels);
+  const attempt = quotaFailure ? currentAttempt : currentAttempt + 1;
+  const retryAfter = new Date(Date.now() + (quotaFailure ? QUOTA_RETRY_DELAY_MS : retryDelayMs(attempt)));
   const summary = errorSummary(err);
 
   await removeLabel(issue.number, config.processingLabel);
   await ensureLabel(FAILED_LABEL, "D93F0B");
   await addLabel(issue.number, FAILED_LABEL);
-  await setRetryAttempt(issue.number, attempt);
+
+  if (quotaFailure) {
+    for (let i = 0; i <= config.maxAgentRetries + 1; i += 1) {
+      await removeLabel(issue.number, `${RETRY_LABEL_PREFIX}${i}`);
+    }
+  } else {
+    await setRetryAttempt(issue.number, attempt);
+  }
+
+  const failureTitle = quotaFailure
+    ? "Quota pause: Symphony Agent waiting for credits reset"
+    : `Failure: Symphony Agent failed on attempt ${attempt}/${config.maxAgentRetries}.`;
+  const retryMessage = quotaFailure
+    ? `Automatic retry in 10 hours: ${retryAfter.toISOString()}`
+    : `Automatic retry after: ${retryAfter.toISOString()}`;
 
   await exec("gh", [
     "issue", "comment", String(issue.number),
     "-R", config.repo,
-    "--body", `<!-- symphony-agent-failure attempt=${attempt} retryAfter=${retryAfter.toISOString()} -->\n❌ Symphony Agent falló en el intento ${attempt}/${config.maxAgentRetries}.\n\nReintento automático a partir de: ${retryAfter.toISOString()}\n\n\`\`\`text\n${summary}\n\`\`\``,
+    "--body", `<!-- symphony-agent-failure attempt=${attempt} retryAfter=${retryAfter.toISOString()} -->\n${failureTitle}\n\n${retryMessage}\n\n\`\`\`text\n${summary}\n\`\`\``,
   ], { env: AGENT_ENV, maxBuffer: 1024 * 1024 * 5 });
 
-  if (attempt >= config.maxAgentRetries) {
+  if (!quotaFailure && attempt >= config.maxAgentRetries) {
     await notifyAgentFailureEmail(issue.number, issue.title, attempt, config.maxAgentRetries, summary);
   }
 }
@@ -294,13 +337,7 @@ async function maybeCleanupMergedMutationBranches(): Promise<void> {
   }
 }
 
-export async function solveIssues(): Promise<void> {
-  await maybeCleanupMergedMutationBranches();
-
-  const openPrs = await fetchOpenPullRequests();
-  await reconcileStaleProcessingLabels(openPrs);
-
-  const issues = await fetchOpenIssues();
+async function collectEligibleIssues(issues: GitHubIssue[], openPrs: OpenPr[]): Promise<GitHubIssue[]> {
   const eligible: GitHubIssue[] = [];
 
   for (const issue of issues) {
@@ -319,40 +356,97 @@ export async function solveIssues(): Promise<void> {
     eligible.push(issue);
   }
 
+  return eligible;
+}
+
+function selectIssueBatch(eligible: GitHubIssue[], allIssues: GitHubIssue[]): ScoredIssue[] {
+  const slots = config.maxConcurrentAgents - running.size;
+  return eligible
+    .map((issue) => ({ issue, score: priorityScore(issue, allIssues) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, slots));
+}
+
+async function previousFailureContext(issueNumber: number, attempt: number): Promise<string> {
+  if (attempt <= 0) return "";
+
+  const prevFailure = await latestFailureRetryState(issueNumber);
+  if (!prevFailure) return "";
+
+  const { stdout: comments } = await exec("gh", [
+    "issue", "view", String(issueNumber),
+    "-R", config.repo,
+    "--json", "comments",
+  ], { env: AGENT_ENV });
+  const data = JSON.parse(comments) as { comments: Array<{ body: string }> };
+  const lastFailComment = [...data.comments].reverse().find((comment) => comment.body.includes("symphony-agent-failure"));
+  const errorBlock = lastFailComment?.body.match(/```text\n([\s\S]*?)```/);
+  return errorBlock ? errorBlock[1].trim() : "";
+}
+
+async function buildLaunchPlan(scored: ScoredIssue): Promise<AgentLaunchPlan> {
+  const attempt = retryAttempt(scored.issue.labels);
+  const routerDecision = routeIssue({
+    number: scored.issue.number,
+    title: scored.issue.title,
+    body: scored.issue.body,
+    labels: scored.issue.labels,
+    attempt,
+    maxKiroAttemptsBeforeCodex: config.maxKiroAttemptsBeforeCodex,
+  });
+
+  return {
+    ...scored,
+    baseBranch: routerDecision.baseBranch,
+    forceCodex: routerDecision.solverPreference === "codex",
+    previousFailureContext: await previousFailureContext(scored.issue.number, attempt),
+    routerDecision,
+  };
+}
+
+function launchAgent(plan: AgentLaunchPlan): void {
+  const { issue, score, baseBranch, forceCodex, previousFailureContext, routerDecision } = plan;
+
+  running.add(issue.number);
+  console.log(`🚀 Lanzando agente para #${issue.number}: ${issue.title} (prioridad: ${score}; router: ${routerDecision.complexity}/${routerDecision.solverPreference}; dominio: ${routerDecision.primaryDomain})`);
+
+  addLabel(issue.number, config.processingLabel).catch(() => {});
+
+  runAgent(issue.number, issue.title, issue.body, baseBranch, forceCodex, previousFailureContext, formatRouterDecision(routerDecision))
+    .then(async () => {
+      await clearFailureState(issue.number);
+      console.log(`✅ Agente terminó #${issue.number}`);
+    })
+    .catch(async (err) => {
+      console.error(`❌ Agente falló #${issue.number}:`, err);
+      await recordFailure(issue, err).catch((recordErr) => {
+        console.error(`❌ No se pudo registrar el fallo de #${issue.number}:`, recordErr);
+      });
+    })
+    .finally(() => {
+      running.delete(issue.number);
+    });
+}
+
+export function getRunningIssues(): number[] {
+  return [...running];
+}
+
+export async function solveIssues(): Promise<void> {
+  await maybeCleanupMergedMutationBranches();
+
+  const openPrs = await fetchOpenPullRequests();
+  await reconcileStaleProcessingLabels(openPrs);
+
+  const issues = await fetchOpenIssues();
+  const eligible = await collectEligibleIssues(issues, openPrs);
+
   if (eligible.length === 0) {
     console.log("💤 No hay issues pendientes");
     return;
   }
 
-  const slots = config.maxConcurrentAgents - running.size;
-  const batch = eligible
-    .map((i) => ({ issue: i, score: priorityScore(i, issues) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(0, slots));
-
-  for (const { issue, score } of batch) {
-    running.add(issue.number);
-    console.log(`🚀 Lanzando agente para #${issue.number}: ${issue.title} (prioridad: ${score})`);
-
-    addLabel(issue.number, config.processingLabel).catch(() => {});
-
-    const baseBranch = issue.labels.includes("audit:weak-test") ? "release" : "hotfix-master";
-    const attempt = retryAttempt(issue.labels);
-    const forceCodex = config.solverCommand === "codex" || attempt >= config.maxKiroAttemptsBeforeCodex;
-
-    runAgent(issue.number, issue.title, issue.body, baseBranch, forceCodex)
-      .then(async () => {
-        await clearFailureState(issue.number);
-        console.log(`✅ Agente terminó #${issue.number}`);
-      })
-      .catch(async (err) => {
-        console.error(`❌ Agente falló #${issue.number}:`, err);
-        await recordFailure(issue, err).catch((recordErr) => {
-          console.error(`❌ No se pudo registrar el fallo de #${issue.number}:`, recordErr);
-        });
-      })
-      .finally(() => {
-        running.delete(issue.number);
-      });
+  for (const scored of selectIssueBatch(eligible, issues)) {
+    launchAgent(await buildLaunchPlan(scored));
   }
 }

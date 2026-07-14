@@ -1,3 +1,5 @@
+import { agentManifest } from "./agent-manifest.js";
+
 function env(key: string, fallback?: string): string {
   const val = process.env[key] ?? fallback;
   if (!val) throw new Error(`Missing env var: ${key}`);
@@ -20,28 +22,23 @@ export const config = {
 
   // GitHub
   repo: env("GITHUB_REPO"),
-  rejectAssignee: env("REJECT_ASSIGNEE", "Guillermo-Narobial"),
+  rejectAssignee: env("REJECT_ASSIGNEE", agentManifest.github.rejectAssignee),
 
   // Repos
-  reposDir: env("REPOS_DIR", "./repos"),
-  repos: [
-    "https://github.com/Narobial/Narobial-Frontend",
-    "https://github.com/Narobial/narobial-changelog",
-    "https://github.com/Narobial/narobialAdmin-Frontend",
-    "https://github.com/Narobial/narobial-docs",
-  ],
+  reposDir: env("REPOS_DIR", agentManifest.repos.directory),
+  repos: agentManifest.repos.urls,
 
   // Solver
-  frontendRepoDir: env("FRONTEND_REPO_DIR", "./repos/Narobial-Frontend"),
-  agentWorkspacesDir: env("AGENT_WORKSPACES_DIR", "./repos"),
-  maxConcurrentAgents: Number(env("MAX_CONCURRENT_AGENTS", "3")),
-  maxAgentRetries: Number(env("MAX_AGENT_RETRIES", "10")),
-  maxKiroAttemptsBeforeCodex: Number(env("MAX_KIRO_ATTEMPTS_BEFORE_CODEX", "3")),
-  solverCommand: env("SOLVER_COMMAND", "kiro"),
-  processingLabel: env("PROCESSING_LABEL", "agente-trabajando"),
+  frontendRepoDir: env("FRONTEND_REPO_DIR", agentManifest.repos.frontendDirectory),
+  agentWorkspacesDir: env("AGENT_WORKSPACES_DIR", agentManifest.repos.directory),
+  maxConcurrentAgents: Number(env("MAX_CONCURRENT_AGENTS", String(agentManifest.agent.maxConcurrentAgents))),
+  maxAgentRetries: Number(env("MAX_AGENT_RETRIES", String(agentManifest.agent.maxAgentRetries))),
+  maxKiroAttemptsBeforeCodex: Number(env("MAX_KIRO_ATTEMPTS_BEFORE_CODEX", String(agentManifest.agent.maxKiroAttemptsBeforeCodex))),
+  solverCommand: env("SOLVER_COMMAND", agentManifest.solver.command),
+  processingLabel: env("PROCESSING_LABEL", agentManifest.agent.processingLabel),
 
   // Deploy qdevweb
-  deployHost: env("DEPLOY_HOST", "qdevweb.intraquiter"),
-  deploySshKey: env("DEPLOY_SSH_KEY", "~/.ssh/id_ed25519"),
-  deployBuildCmd: env("DEPLOY_BUILD_CMD", "build-hotfix"),
+  deployHost: env("DEPLOY_HOST", agentManifest.deploy.host),
+  deploySshKey: env("DEPLOY_SSH_KEY", agentManifest.deploy.sshKey),
+  deployBuildCmd: env("DEPLOY_BUILD_CMD", agentManifest.deploy.buildCmd),
 };

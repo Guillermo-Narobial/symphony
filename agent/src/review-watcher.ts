@@ -4,6 +4,8 @@ import { resolve, join } from "node:path";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { AGENT_ENV, runAgentWithFallback } from "./agent-executor.js";
 import { config } from "./config.js";
+import { buildInstructionContext } from "./instruction-context.js";
+import { formatRouterDecision, routeIssue } from "./llm-router.js";
 import { addDeployUrlToPr, branchNameForIssue, installDependencies, prepareExistingBranchWorkspace } from "./runner.js";
 
 const exec = promisify(execFile);
@@ -121,8 +123,9 @@ function extractBranch(issueNumber: number, title: string): string | null {
   return null;
 }
 
-function buildCorrectionPrompt(issueNumber: number, title: string, body: string, comments: Comment[], branch: string, imagePaths: string[]): string {
+function buildCorrectionPrompt(issueNumber: number, title: string, body: string, comments: Comment[], branch: string, imagePaths: string[], routerContext: string): string {
   const commentBlock = comments.map((c) => `**@${c.author}** (${c.createdAt}):\n${c.body}`).join("\n\n---\n\n");
+  const instructionContext = buildInstructionContext(title, body);
 
   const imageSection = imagePaths.length > 0
     ? `## Capturas adjuntas (ANALIZAR CON TOOL read mode Image)
@@ -154,11 +157,15 @@ ${body}
 ${commentBlock}
 
 ${imageSection}
+${instructionContext}
+
+${routerContext}
+
 ## Instrucciones
 
 ### 1. Preparación (OBLIGATORIO)
 
-- Lee \`AGENTS.md\` e \`INSTRUCTIONS.md\` del proyecto.
+- Lee primero los documentos listados en "Contexto de instrucciones dirigido". No cargues \`INSTRUCTIONS.md\` completo salvo que necesites una seccion concreta no cubierta por ese contexto.
 - Ejecuta \`npm run test:unit:profile\` para detectar el perfil de testing activo.
 - Lee los comentarios de revisión arriba y entiende qué hay que corregir.
 - Si hay capturas adjuntas, ábrelas con la herramienta de lectura de imágenes para entender el problema visual.
@@ -252,14 +259,22 @@ export async function reviewWatcher(): Promise<void> {
     const attempts = getAttemptCount(issue.labels) + 1;
     await setAttemptCount(issue.number, attempts);
 
-    const useCodex = attempts > MAX_KIRO_ATTEMPTS;
+    const routerDecision = routeIssue({
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      labels: issue.labels,
+      attempt: Math.max(0, attempts - 1),
+      maxKiroAttemptsBeforeCodex: MAX_KIRO_ATTEMPTS,
+    });
+    const useCodex = attempts > MAX_KIRO_ATTEMPTS || routerDecision.solverPreference === "codex";
     const agentName = useCodex ? "codex" : "kiro-cli";
-    console.log(`🔄 Issue #${issue.number}: intento ${attempts} con ${agentName}`);
+    console.log(`🔄 Issue #${issue.number}: intento ${attempts} con ${agentName} (router: ${routerDecision.complexity}/${routerDecision.primaryDomain})`);
 
     processing.add(issue.number);
     const imagePaths = await downloadImages(comments, issue.number);
     if (imagePaths.length > 0) console.log(`📸 ${imagePaths.length} captura(s) descargadas para análisis`);
-    const prompt = buildCorrectionPrompt(issue.number, issue.title, issue.body, comments, branch, imagePaths);
+    const prompt = buildCorrectionPrompt(issue.number, issue.title, issue.body, comments, branch, imagePaths, formatRouterDecision(routerDecision));
     try {
       const workDir = await runCorrectionAgent(issue.number, branch, prompt, useCodex);
       await deployAndNotify(issue.number, branch, workDir);

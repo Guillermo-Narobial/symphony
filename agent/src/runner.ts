@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { AGENT_ENV, runAgentWithFallback } from "./agent-executor.js";
 import { config } from "./config.js";
 import { linkBranch, updateIssueStatus } from "./issuer.js";
+import { buildInstructionContext } from "./instruction-context.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
 
 const exec = promisify(execFile);
@@ -80,25 +81,7 @@ export async function installDependencies(workDir: string): Promise<void> {
   });
 }
 
-export async function prepareIssueWorkspace(issueNumber: number, baseBranch: string): Promise<string> {
-  const workDir = await ensureIssueWorkspace(issueNumber);
-
-  await git(workDir, "fetch", "origin", "--prune");
-  await git(workDir, "reset", "--hard");
-  await git(workDir, "clean", "-fd");
-  try {
-    await git(workDir, "checkout", baseBranch);
-  } catch {
-    await git(workDir, "checkout", "-b", baseBranch, `origin/${baseBranch}`);
-  }
-  await git(workDir, "pull", "origin", baseBranch, "--ff-only");
-
-  return workDir;
-}
-
-export async function prepareExistingBranchWorkspace(issueNumber: number, branch: string): Promise<string> {
-  const workDir = await ensureIssueWorkspace(issueNumber);
-
+async function resetWorkspaceToBranch(workDir: string, branch: string): Promise<void> {
   await git(workDir, "fetch", "origin", "--prune");
   await git(workDir, "reset", "--hard");
   await git(workDir, "clean", "-fd");
@@ -108,11 +91,21 @@ export async function prepareExistingBranchWorkspace(issueNumber: number, branch
     await git(workDir, "checkout", "-b", branch, `origin/${branch}`);
   }
   await git(workDir, "pull", "origin", branch, "--ff-only");
+}
 
+export async function prepareIssueWorkspace(issueNumber: number, baseBranch: string): Promise<string> {
+  const workDir = await ensureIssueWorkspace(issueNumber);
+  await resetWorkspaceToBranch(workDir, baseBranch);
   return workDir;
 }
 
-function buildPrompt(issueNumber: number, title: string, body: string, branch: string, baseBranch: string, kbContext: string): string {
+export async function prepareExistingBranchWorkspace(issueNumber: number, branch: string): Promise<string> {
+  const workDir = await ensureIssueWorkspace(issueNumber);
+  await resetWorkspaceToBranch(workDir, branch);
+  return workDir;
+}
+
+function buildPrompt(issueNumber: number, title: string, body: string, branch: string, baseBranch: string, kbContext: string, instructionContext: string, routerContext: string): string {
   return `# Orden de trabajo — Issue #${issueNumber}
 
 ## Contexto
@@ -121,6 +114,10 @@ Estás en el repositorio Narobial-Frontend, rama \`${branch}\`, creada desde \`$
 Tu objetivo es resolver la issue #${issueNumber} del repo ${config.repo}.
 
 ${kbContext}
+
+${instructionContext}
+
+${routerContext}
 
 ## Issue
 
@@ -134,7 +131,12 @@ ${body}
 
 ### 1. Preparación (OBLIGATORIO)
 
-- Lee \`AGENTS.md\` e \`INSTRUCTIONS.md\` del proyecto para conocer todas las reglas.
+- Lee primero los documentos listados en "Contexto de instrucciones dirigido". No cargues \`INSTRUCTIONS.md\` completo salvo que necesites una seccion concreta no cubierta por ese contexto.
+- **Consulta el historial de decisiones antes de implementar:**
+  \`\`\`bash
+  curl -s "http://localhost:4040/api/decisions?q=$(echo '${title}' | tr ' ' '+')" | head -80
+  \`\`\`
+  Esto te dará resoluciones anteriores similares. Si hay coincidencias relevantes, úsalas como referencia para no repetir errores ni reinventar soluciones.
 - Ejecuta \`npm run test:unit:profile\` para detectar el perfil de testing activo.
 - Identifica los flujos, componentes y servicios afectados por esta issue.
 - **Si la issue menciona que algo funcionaba en una versión anterior (ej: "en v6.5.4 funcionaba"):**
@@ -146,7 +148,7 @@ ${body}
 
 - Implementa la solución siguiendo estrictamente los requisitos de la issue.
 - Respeta las convenciones del proyecto: design system \`nb-\`, traducciones con \`| translate\`, CSS variables.
-- Si tocas textos visibles al usuario, añade las claves en \`es.json\` y ejecuta \`npm run i18n:sync\`.
+- Si tocas textos visibles al usuario, añade las claves en \`es.json\` con el valor en español y ejecuta \`npm run i18n:sync\`. El sync propaga automáticamente a idiomas latinos (ar, cl, co, mx, mx-to, pe) copiando el español. Para en.json y fr.json las claves nuevas DEBEN quedar como \`"[TODO] valor en español"\` — el sync lo hace solo, NO traduzcas manualmente a esos dos idiomas. El resto (pt.json, cat.json) sí se traducen automáticamente.
 - Revisa seguridad: no concatenar entradas sin validar, no dejar edge cases sin cubrir.
 - Cubre estados \`null\`, \`undefined\`, vacío, loading, error cuando apliquen.
 
@@ -199,72 +201,106 @@ cd narobial-changelog && git pull origin main
 `;
 }
 
+function buildSelfCritiqueBlock(previousFailureContext: string): string {
+  if (!previousFailureContext) return "";
+
+  return `\n\n## ⚠️ Autocrítica — Intento anterior falló\n\nEl agente anterior intentó resolver esta issue y falló. Analiza su error antes de empezar y NO repitas el mismo enfoque:\n\n\`\`\`text\n${previousFailureContext.slice(0, 3000)}\n\`\`\`\n\nSé autocrítico: identifica qué hizo mal, por qué falló, y usa un enfoque diferente.\n`;
+}
+
+async function buildAgentPrompt(
+  issueNumber: number,
+  title: string,
+  body: string,
+  branch: string,
+  baseBranch: string,
+  previousFailureContext: string,
+  routerContext: string,
+): Promise<string> {
+  const kbContext = await searchKnowledgeBase(title, body);
+  const instructionContext = buildInstructionContext(title, body);
+  return buildPrompt(issueNumber, title, body, branch, baseBranch, kbContext, instructionContext, routerContext)
+    + buildSelfCritiqueBlock(previousFailureContext);
+}
+
+async function hasCommitsSince(workDir: string, baseBranch: string): Promise<boolean> {
+  return (await git(workDir, "log", "--oneline", `${baseBranch}..HEAD`)).length > 0;
+}
+
+async function prepareAgentRun(issueNumber: number, branch: string, baseBranch: string): Promise<string> {
+  const workDir = await prepareIssueWorkspace(issueNumber, baseBranch);
+  await installDependencies(workDir);
+  await git(workDir, "checkout", "-B", branch);
+  await linkBranch(issueNumber, branch);
+  await updateIssueStatus(issueNumber, "en-desarrollo");
+  return workDir;
+}
+
 export async function runAgent(
   issueNumber: number,
   title: string,
   body: string,
   baseBranch: string,
   forceCodex = false,
+  previousFailureContext = "",
+  routerContext = "",
 ): Promise<void> {
   const branch = branchNameForIssue(issueNumber, title);
-  const workDir = await prepareIssueWorkspace(issueNumber, baseBranch);
+  const workDir = await prepareAgentRun(issueNumber, branch, baseBranch);
+  const finalPrompt = await buildAgentPrompt(issueNumber, title, body, branch, baseBranch, previousFailureContext, routerContext);
 
-  await installDependencies(workDir);
-  await git(workDir, "checkout", "-B", branch);
-
-  // Vincular rama a la issue (campo Development) y marcar en desarrollo
-  await linkBranch(issueNumber, branch);
-  await updateIssueStatus(issueNumber, "en-desarrollo");
-
-  // Buscar resoluciones similares en el historial
-  const kbContext = await searchKnowledgeBase(title, body);
-  const prompt = buildPrompt(issueNumber, title, body, branch, baseBranch, kbContext);
-
-  const result = await runAgentWithFallback(prompt, workDir, {
+  const result = await runAgentWithFallback(finalPrompt, workDir, {
     forceCodex: config.solverCommand === "codex" || forceCodex,
   });
   console.log(`✅ Solver finalizado con ${result.solver}${result.usedFallback ? " (fallback)" : ""}`);
 
-  // Verificar si hay commits antes de deploy
-  const hasCommits = (await git(workDir, "log", "--oneline", `${baseBranch}..HEAD`)).length > 0;
-  if (!hasCommits) {
+  if (!(await hasCommitsSince(workDir, baseBranch))) {
     throw new Error("El solver terminó sin generar commits");
   }
 
-  // Deploy a qdevweb
   await updateIssueStatus(issueNumber, "desarrollado");
   const port = await deployToQdevweb(branch, workDir);
 
-  // Actualizar PR con URL de deploy
   if (port) {
     const deployUrl = `https://${config.deployHost}:${port}`;
     await addDeployUrlToPr(branch, deployUrl);
   }
 }
 
-async function deployToQdevweb(branch: string, workDir: string): Promise<string | null> {
-  const { deployHost, deploySshKey, deployBuildCmd } = config;
-  const sshOpts = ["-i", deploySshKey, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30"];
-  const remote = `root@${deployHost}`;
+function sshOptions(): string[] {
+  return ["-i", config.deploySshKey, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30"];
+}
 
-  // 1. Build local
-  console.log(`🔨 Build local: npm run ${deployBuildCmd}...`);
-  await exec("npm", ["run", deployBuildCmd], { cwd: workDir, env: AGENT_ENV, maxBuffer: 1024 * 1024 * 100, timeout: 300_000 });
+function deployContainerName(branch: string): string {
+  return `nf-${branch.replace(/\//g, "-")}`.toLowerCase();
+}
 
-  // 2. Empaquetar dist + certs
+async function buildFrontend(workDir: string): Promise<void> {
+  console.log(`🔨 Build local: npm run ${config.deployBuildCmd}...`);
+  await exec("npm", ["run", config.deployBuildCmd], {
+    cwd: workDir,
+    env: AGENT_ENV,
+    maxBuffer: 1024 * 1024 * 100,
+    timeout: 300_000,
+  });
+}
+
+async function packageFrontend(workDir: string): Promise<string> {
   console.log("📦 Empaquetando build...");
   const tarFile = "/tmp/agent-deploy.tar.gz";
-  await exec("tar", ["czf", tarFile, "dist/narobial", "etc/default.conf", "etc/nginx.crt", "etc/nginx.key"], { cwd: workDir, env: AGENT_ENV });
+  await exec("tar", ["czf", tarFile, "dist/narobial", "etc/default.conf", "etc/nginx.crt", "etc/nginx.key"], {
+    cwd: workDir,
+    env: AGENT_ENV,
+  });
+  return tarFile;
+}
 
-  // 3. Subir al servidor
-  console.log(`📤 Subiendo a ${deployHost}...`);
+async function uploadPackage(tarFile: string, sshOpts: string[], remote: string): Promise<void> {
+  console.log(`📤 Subiendo a ${config.deployHost}...`);
   await exec("scp", [...sshOpts, tarFile, `${remote}:/tmp/agent-deploy.tar.gz`], { env: AGENT_ENV });
+}
 
-  // 4. Construir imagen y lanzar contenedor en remoto
-  const containerName = `nf-${branch.replace(/\//g, "-")}`.toLowerCase();
-  console.log(`🐳 Docker build + run (${containerName})...`);
-
-  const remoteScript = `
+function remoteDeployScript(containerName: string): string {
+  return `
 set -e
 DIR="/tmp/agent-build-$$"
 mkdir -p "$DIR" && cd "$DIR"
@@ -293,16 +329,30 @@ docker run -d --name "${containerName}" -p "$PORT:443" --restart unless-stopped 
 rm -rf "$DIR" /tmp/agent-deploy.tar.gz
 echo "$PORT"
 `;
+}
 
-  const { stdout } = await exec("ssh", [...sshOpts, remote, remoteScript], {
+async function runRemoteDeploy(sshOpts: string[], remote: string, containerName: string): Promise<string | null> {
+  console.log(`🐳 Docker build + run (${containerName})...`);
+  const { stdout } = await exec("ssh", [...sshOpts, remote, remoteDeployScript(containerName)], {
     env: AGENT_ENV,
     maxBuffer: 1024 * 1024 * 10,
     timeout: 300_000,
   });
+  return stdout.trim().split("\n").pop()?.trim() || null;
+}
 
-  const port = stdout.trim().split("\n").pop()?.trim() || null;
+async function deployToQdevweb(branch: string, workDir: string): Promise<string | null> {
+  const sshOpts = sshOptions();
+  const remote = `root@${config.deployHost}`;
+  const containerName = deployContainerName(branch);
+
+  await buildFrontend(workDir);
+  const tarFile = await packageFrontend(workDir);
+  await uploadPackage(tarFile, sshOpts, remote);
+  const port = await runRemoteDeploy(sshOpts, remote, containerName);
+
   if (port) {
-    console.log(`✅ Deploy completado: https://${deployHost}:${port}`);
+    console.log(`✅ Deploy completado: https://${config.deployHost}:${port}`);
   }
   return port;
 }

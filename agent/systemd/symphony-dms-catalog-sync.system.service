@@ -1,0 +1,19 @@
+[Unit]
+Description=Symphony DMS catalog sync (system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gcalleja
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/gcalleja
+Environment=GIT_CONFIG_GLOBAL=/home/gcalleja/.gitconfig
+Environment="GIT_SSH_COMMAND=ssh -i /home/gcalleja/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
+Environment=DMS_CATALOG_FRONTEND_REPO_DIR=/home/gcalleja/code/Narobial-Frontend-release-sync
+Environment=DMS_CATALOG_TARGET_BRANCH=release
+ExecStart=/usr/bin/flock -n -E 75 /tmp/symphony-dms-catalog-sync.lock /usr/bin/npx tsx src/dms-catalog-sync.ts
+SuccessExitStatus=75
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
+TimeoutStartSec=900

@@ -9,7 +9,7 @@ import { notifyRejectionEmail } from "./notifier-email.js";
 const exec = promisify(execFile);
 
 const WORK_DIR = resolve(config.frontendRepoDir);
-const COVERAGE_THRESHOLD = 60; // %
+const COVERAGE_THRESHOLD = 85; // %
 const MAX_ISSUES_PER_MODULE = 3;
 const ISSUES_WINDOW_DAYS = 14;
 const PR_STALE_HOURS = 48;

@@ -1,0 +1,26 @@
+# Central operational defaults for Symphony Agent.
+# Environment variables in .env still take precedence for deployment-specific values.
+agent:
+  max_concurrent_agents: 3
+  max_agent_retries: 10
+  max_kiro_attempts_before_codex: 3
+  processing_label: agente-trabajando
+solver:
+  command: kiro
+repos:
+  directory: ./repos
+  frontend_directory: ./repos/Narobial-Frontend
+  urls:
+    - https://github.com/Narobial/Narobial-Frontend
+    - https://github.com/Narobial/narobial-changelog
+    - https://github.com/Narobial/narobialAdmin-Frontend
+    - https://github.com/Narobial/narobial-docs
+deploy:
+  host: qdevweb.intraquiter
+  ssh_key: ~/.ssh/id_ed25519
+  build_cmd: build-hotfix
+github:
+  reject_assignee: Guillermo-Narobial
+status_server:
+  port: 4040
+  enabled: true

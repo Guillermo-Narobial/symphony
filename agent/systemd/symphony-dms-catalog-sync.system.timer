@@ -1,0 +1,9 @@
+[Unit]
+Description=Symphony daily DMS catalog sync (system)
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

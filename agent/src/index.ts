@@ -1,10 +1,46 @@
 import "dotenv/config";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
 import { config } from "./config.js";
 import { syncRepos } from "./repos.js";
 import { fetchTasks } from "./fetcher.js";
 import { processTask } from "./controller.js";
 import { solveIssues } from "./solver.js";
 import { reviewWatcher } from "./review-watcher.js";
+import { startStatusServer } from "./status-server.js";
+import { startTelegramBot } from "./telegram-bot.js";
+
+// --- PID Lockfile: prevent duplicate instances ---
+const LOCKFILE = resolve(process.cwd(), ".symphony-agent.pid");
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function acquireLock(): void {
+  if (existsSync(LOCKFILE)) {
+    const existingPid = Number(readFileSync(LOCKFILE, "utf-8").trim());
+    if (existingPid && isProcessAlive(existingPid)) {
+      console.error(`❌ Ya hay una instancia corriendo (PID ${existingPid}). Abortando.`);
+      process.exit(1);
+    }
+    // Stale lockfile — process is dead, remove it
+    console.warn(`⚠️ Lockfile obsoleto (PID ${existingPid} muerto). Limpiando.`);
+    unlinkSync(LOCKFILE);
+  }
+  writeFileSync(LOCKFILE, String(process.pid));
+}
+
+function releaseLock(): void {
+  try { unlinkSync(LOCKFILE); } catch { /* ignore */ }
+}
+
+acquireLock();
+
+// Clean up on exit
+process.on("exit", releaseLock);
+process.on("SIGINT", () => { releaseLock(); process.exit(0); });
+process.on("SIGTERM", () => { releaseLock(); process.exit(0); });
 
 // --user <usuario> override (default: gcalleja via env/config)
 const userIdx = process.argv.indexOf("--user");
@@ -16,15 +52,11 @@ if (userIdx !== -1 && process.argv[userIdx + 1]) {
 const onlyIdx = process.argv.indexOf("--only");
 const onlyId = onlyIdx !== -1 ? process.argv[onlyIdx + 1] : undefined;
 
-const INTERVAL_MS = 5 * 60_000; // 5 minutos
+const INTERVAL_MS = 60 * 60_000; // una hora
 
 async function tick() {
   try {
-    // 1. Sincronizar repos
-    await syncRepos();
-    console.log("✅ Repos sincronizados");
-
-    // 2. Extraer incidencias del DMS
+    // 1. Extraer incidencias del DMS sin sincronizar repos innecesariamente
     let tasks = await fetchTasks();
     console.log(`📋 Recibidas ${tasks.length} tareas del DMS`);
 
@@ -41,12 +73,18 @@ async function tick() {
     });
     console.log(`🎯 ${tasks.length} tarea(s) asignadas a gcalleja/nagent`);
 
-    // 3. Crear issues en GitHub para cada tarea nueva
+    // Solo sincronizamos los repos si hay trabajo DMS nuevo que procesar.
+    if (tasks.length > 0) {
+      await syncRepos();
+      console.log("✅ Repos sincronizados para procesar tareas nuevas");
+    }
+
+    // 2. Crear issues en GitHub para cada tarea nueva
     for (const task of tasks) {
       await processTask(task);
     }
 
-    // 4. Detectar issues abiertas y lanzar agentes para resolverlas
+    // 3. Detectar issues abiertas y lanzar agentes para resolverlas
     await solveIssues();
   } catch (err) {
     console.error("❌ Error en tick:", err);
@@ -54,6 +92,8 @@ async function tick() {
 }
 
 console.log("🚀 Orquestador iniciado");
+startStatusServer();
+startTelegramBot();
 await tick();
 setInterval(tick, INTERVAL_MS);
 

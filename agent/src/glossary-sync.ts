@@ -229,11 +229,11 @@ async function ensureCleanWorkingTree(): Promise<void> {
 }
 
 async function syncFrontendBranch(): Promise<void> {
-  await ensureCleanWorkingTree();
+  await git("checkout", "--", ".");
   await git("fetch", "origin", "--prune");
   await git("switch", TARGET_BRANCH);
-  await git("pull", "origin", TARGET_BRANCH, "--ff-only");
-  await ensureCleanWorkingTree();
+  await git("merge", "--ff-only", `origin/${TARGET_BRANCH}`);
+  await git("checkout", "--", ".");
 }
 
 async function commitAndPushIfChanged(content: string): Promise<void> {

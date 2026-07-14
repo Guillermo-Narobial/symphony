@@ -4,3 +4,6 @@ dist
 repos/
 docs/NDA-*
 
+.symphony-agent.pid
+src/.symphony-agent.pid
+.projects-report-state.json

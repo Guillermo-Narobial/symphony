@@ -34,6 +34,56 @@ async function syncRepo(dir: string, branch: string): Promise<void> {
   await exec("git", ["pull", "origin", branch, "--ff-only"], { cwd: dir });
 }
 
+async function detectBaseBranch(dir: string, repoName: string): Promise<string> {
+  if (repoName === "Narobial-Frontend") return "hotfix-master";
+
+  try {
+    const { stdout } = await exec("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: dir });
+    const remoteHead = stdout.trim();
+    const branch = remoteHead.replace(/^origin\//, "");
+    if (branch) return branch;
+  } catch {
+    // Fallbacks below cover repos without origin/HEAD configured locally.
+  }
+
+  for (const candidate of ["main", "master"]) {
+    try {
+      await exec("git", ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${candidate}`], { cwd: dir });
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  throw new Error(`No se pudo detectar la rama base de ${repoName}`);
+}
+
+function normalizeCommandError(err: any, repoName: string, step: string): Error {
+  const message = err?.message || String(err);
+
+  if (
+    step === "npm ci" &&
+    typeof message === "string" &&
+    message.includes("EACCES") &&
+    message.includes("node_modules")
+  ) {
+    return new Error(
+      `${step} fallo en ${repoName} por permisos en node_modules. ` +
+      "Probablemente hay archivos creados por root u otro usuario dentro del clon local."
+    );
+  }
+
+  return err instanceof Error ? err : new Error(message);
+}
+
+async function installDependencies(dir: string, repoName: string): Promise<void> {
+  try {
+    await exec("npm", ["ci"], { cwd: dir, timeout: 120_000 });
+  } catch (err: any) {
+    throw normalizeCommandError(err, repoName, "npm ci");
+  }
+}
+
 async function getOutdated(dir: string): Promise<Record<string, OutdatedPkg>> {
   try {
     const { stdout } = await exec("npm", ["outdated", "--json"], { cwd: dir });
@@ -175,7 +225,6 @@ _Generado por symphony-agent deps-checker._`;
 async function processRepo(repoUrl: string): Promise<Omit<RepoResult, "repo">> {
   const repoName = repoUrl.split("/").pop()!;
   const dir = resolve(config.reposDir, repoName);
-  const branch = repoName === "Narobial-Frontend" ? "hotfix-master" : "main";
 
   console.log(`\n📦 Procesando ${repoName}...`);
 
@@ -184,8 +233,9 @@ async function processRepo(repoUrl: string): Promise<Omit<RepoResult, "repo">> {
     await exec("git", ["clone", repoUrl, dir]);
   }
 
+  const branch = await detectBaseBranch(dir, repoName);
   await syncRepo(dir, branch);
-  await exec("npm", ["ci"], { cwd: dir, timeout: 120_000 });
+  await installDependencies(dir, repoName);
 
   const outdated = await getOutdated(dir);
   const vulns = await getAudit(dir);
