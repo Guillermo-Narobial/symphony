@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Symphony user unit drift check
+
+[Timer]
+OnCalendar=*-*-* 05:15:00 Europe/Madrid
+Persistent=true
+
+[Install]
+WantedBy=timers.target

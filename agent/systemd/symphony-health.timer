@@ -2,9 +2,8 @@
 Description=Symphony agent health monitor
 
 [Timer]
-OnBootSec=5min
+OnStartupSec=5min
 OnUnitActiveSec=15min
-Persistent=true
 
 [Install]
 WantedBy=timers.target

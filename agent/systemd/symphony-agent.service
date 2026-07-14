@@ -5,7 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=gcalleja
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=NODE_ENV=production
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -16,4 +15,4 @@ MemoryMax=12G
 CPUQuota=200%
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

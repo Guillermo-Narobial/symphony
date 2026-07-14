@@ -1,0 +1,7 @@
+[Unit]
+Description=Verify Symphony user unit drift
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+ExecStart=/home/gcalleja/code/symphony/agent/scripts/check-user-unit-drift.sh
