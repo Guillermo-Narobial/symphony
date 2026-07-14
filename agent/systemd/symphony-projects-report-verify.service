@@ -1,0 +1,10 @@
+[Unit]
+Description=Verify Symphony daily projects report
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npx tsx src/projects-report-verifier.ts
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
+TimeoutStartSec=120
