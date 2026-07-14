@@ -243,6 +243,7 @@ export async function runAgent(
   forceCodex = false,
   previousFailureContext = "",
   routerContext = "",
+  labels: string[] = [],
 ): Promise<void> {
   const branch = branchNameForIssue(issueNumber, title);
   const workDir = await prepareAgentRun(issueNumber, branch, baseBranch);
@@ -258,7 +259,7 @@ export async function runAgent(
   }
 
   await updateIssueStatus(issueNumber, "desarrollado");
-  const port = await deployToQdevweb(branch, workDir);
+  const port = await deployIfAllowed(branch, workDir, labels);
 
   if (port) {
     const deployUrl = `https://${config.deployHost}:${port}`;
@@ -339,6 +340,22 @@ async function runRemoteDeploy(sshOpts: string[], remote: string, containerName:
     timeout: 300_000,
   });
   return stdout.trim().split("\n").pop()?.trim() || null;
+}
+
+async function deployIfAllowed(branch: string, workDir: string, labels: string[]): Promise<string | null> {
+  const blockedLabels = new Set(["security", "critical", "database", "deployment", "permissions", "audit:security"]);
+  if (labels.some((label) => blockedLabels.has(label.toLowerCase()))) {
+    console.log("⛔ Deploy automático bloqueado por etiqueta que requiere aprobación humana");
+    return null;
+  }
+  const { stdout } = await exec("git", ["diff", "--name-only", "origin/hotfix-master...HEAD"], { cwd: workDir, env: AGENT_ENV });
+  const sensitive = stdout.split("\n").filter(Boolean).find((file) => /(^|\/)(infra|infrastructure|deploy|docker|k8s|helm|terraform|migrations?|auth|authentication|permissions?)(\/|$)|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock)$|^\.github\/workflows\//i.test(file));
+  if (sensitive) { console.log(`⛔ Deploy automático bloqueado por cambio sensible: ${sensitive}`); return null; }
+  try {
+    await exec("npm", ["run", "test:unit:staged"], { cwd: workDir, env: AGENT_ENV, timeout: 300_000, maxBuffer: 1024 * 1024 * 100 });
+    await exec("npm", ["run", "test:unit:branch:coverage"], { cwd: workDir, env: AGENT_ENV, timeout: 300_000, maxBuffer: 1024 * 1024 * 100 });
+  } catch (error) { console.log(`⛔ Deploy automático bloqueado: pruebas no verdes (${(error as Error).message})`); return null; }
+  return deployToQdevweb(branch, workDir);
 }
 
 async function deployToQdevweb(branch: string, workDir: string): Promise<string | null> {

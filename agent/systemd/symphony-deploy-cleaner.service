@@ -1,0 +1,8 @@
+[Unit]
+Description=Clean Symphony temporary deploys older than 7 days
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+ExecStart=/usr/bin/npx tsx src/deploy-cleaner.ts
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env

@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly cleanup of Symphony temporary deploys
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00 Europe/Madrid
+Persistent=true
+
+[Install]
+WantedBy=timers.target

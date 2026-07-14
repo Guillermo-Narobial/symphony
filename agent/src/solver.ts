@@ -412,7 +412,7 @@ function launchAgent(plan: AgentLaunchPlan): void {
 
   addLabel(issue.number, config.processingLabel).catch(() => {});
 
-  runAgent(issue.number, issue.title, issue.body, baseBranch, forceCodex, previousFailureContext, formatRouterDecision(routerDecision))
+  runAgent(issue.number, issue.title, issue.body, baseBranch, forceCodex, previousFailureContext, formatRouterDecision(routerDecision), issue.labels)
     .then(async () => {
       await clearFailureState(issue.number);
       console.log(`✅ Agente terminó #${issue.number}`);
