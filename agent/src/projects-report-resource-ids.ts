@@ -1,11 +1,11 @@
-export interface ProjectResourceInput {
+export interface ProjectResource {
   resourceId?: string;
 }
 
 export interface ProjectResourceInput {
   id: string;
   analystDeveloperId?: string;
-  resources?: ProjectResourceInput[];
+  resources?: ProjectResource[];
 }
 
 export function analystDeveloperIds(value?: string): string[] {
