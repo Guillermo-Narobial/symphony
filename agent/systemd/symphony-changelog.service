@@ -5,6 +5,7 @@ Description=Symphony weekly changelog release notes generator
 Type=oneshot
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/npx tsx src/changelog-generator.ts
+ExecStart=/usr/bin/flock -n -E 75 /tmp/symphony-git-write.lock /usr/bin/npx tsx src/changelog-generator.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
+SuccessExitStatus=75
 TimeoutStartSec=300

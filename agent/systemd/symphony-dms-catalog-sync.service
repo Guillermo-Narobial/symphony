@@ -10,7 +10,7 @@ Environment=GIT_CONFIG_GLOBAL=/home/gcalleja/.gitconfig
 Environment="GIT_SSH_COMMAND=ssh -i /home/gcalleja/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new"
 Environment=DMS_CATALOG_FRONTEND_REPO_DIR=/home/gcalleja/code/Narobial-Frontend-release-sync
 Environment=DMS_CATALOG_TARGET_BRANCH=release
-ExecStart=/usr/bin/flock -n -E 75 /tmp/symphony-dms-catalog-sync.lock /usr/bin/npx tsx src/dms-catalog-sync.ts
+ExecStart=/usr/bin/flock -n -E 75 /tmp/symphony-git-write.lock /usr/bin/flock -n -E 75 /tmp/symphony-dms-catalog-sync.lock /usr/bin/npx tsx src/dms-catalog-sync.ts
 SuccessExitStatus=75
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
 TimeoutStartSec=900
