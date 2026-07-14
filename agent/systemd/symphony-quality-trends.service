@@ -1,0 +1,8 @@
+[Unit]
+Description=Symphony weekly quality trends
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/gcalleja/code/symphony/agent
+ExecStart=/usr/bin/npx tsx src/quality-trends.ts
+EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
