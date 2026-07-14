@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import nodemailer from "nodemailer";
 import { config } from "./config.js";
+import { analystDeveloperIds, projectResourceIds } from "./projects-report-resource-ids.js";
 
 interface RecipientRoute {
   primary: string;
@@ -35,7 +36,7 @@ interface WorkItem {
   id: string;
   title: string;
   statusId: string;
-  analystDeveloperId: string;
+  analystDeveloperId?: string;
   estimatedDevelopmentEndDate: string;
   closingDate?: string;
   isQ700?: boolean;
@@ -80,6 +81,13 @@ const RESOURCE_EMAILS: Record<string, string> = {
 const EXCLUDED_RESOURCES = ["gcalleja", "jgarcia"];
 
 const SEARCH_VALUES = ["gcalleja", "jgarcia"];
+const missingAnalystDeveloperIds = new Set<string>();
+
+function reportMissingAnalystDeveloperId(projectId: string): void {
+  if (missingAnalystDeveloperIds.has(projectId)) return;
+  missingAnalystDeveloperIds.add(projectId);
+  console.warn(`⚠️ Proyecto ${projectId} sin analystDeveloperId; se usarán solo recursos asignados.`);
+}
 
 async function fetchItems(method: string): Promise<WorkItem[]> {
   const customInterface = JSON.stringify({
@@ -125,7 +133,9 @@ async function fetchQ700s(): Promise<WorkItem[]> {
 }
 
 function getResourceIds(p: WorkItem): string {
-  if (!p.resources || p.resources.length === 0) return p.analystDeveloperId.replace(/²/g, ", ");
+  const analystIds = analystDeveloperIds(p.analystDeveloperId);
+  if (analystIds.length === 0) reportMissingAnalystDeveloperId(p.id);
+  if (!p.resources || p.resources.length === 0) return analystIds.join(", ");
   return [...new Set(p.resources.map((r) => r.resourceId))].join(", ");
 }
 
@@ -238,18 +248,7 @@ function getFallbackEmail(email: string): string | undefined {
 }
 
 function getProjectResourceIds(project: WorkItem): string[] {
-  const ids = new Set<string>();
-
-  for (const rawId of project.analystDeveloperId.split("²")) {
-    const id = rawId.trim();
-    if (id) ids.add(id);
-  }
-
-  for (const resource of project.resources ?? []) {
-    if (resource.resourceId) ids.add(resource.resourceId);
-  }
-
-  return [...ids];
+  return projectResourceIds(project, reportMissingAnalystDeveloperId);
 }
 
 function filterProjectsForResource(projects: WorkItem[], resourceId: string): WorkItem[] {

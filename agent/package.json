@@ -14,8 +14,12 @@
     "health": "tsx src/health-monitor.ts",
     "glossary:sync": "tsx src/glossary-sync.ts",
     "projects:report": "tsx src/projects-report.ts",
+    "test:projects-report": "tsx --test src/projects-report-resource-ids.test.ts",
+    "mutator:manual": "tsx src/mutator-runner.ts",
+    "mutator:manual:bg": "tsx src/mutator-launcher.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "coverage:audit": "tsx src/coverage-auditor.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
