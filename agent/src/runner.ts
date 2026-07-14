@@ -131,7 +131,7 @@ ${body}
 
 ### 1. Preparación (OBLIGATORIO)
 
-- Lee primero los documentos listados en "Contexto de instrucciones dirigido" y los ADR relevantes de `docs/adr/`. No cargues \`INSTRUCTIONS.md\` completo salvo que necesites una seccion concreta no cubierta por ese contexto.
+- Lee primero los documentos listados en "Contexto de instrucciones dirigido" y los ADR relevantes de docs/adr/. No cargues \`INSTRUCTIONS.md\` completo salvo que necesites una seccion concreta no cubierta por ese contexto.
 - **Consulta el historial de decisiones antes de implementar:**
   \`\`\`bash
   curl -s "http://localhost:4040/api/decisions?q=$(echo '${title}' | tr ' ' '+')" | head -80
