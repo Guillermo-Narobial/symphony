@@ -1,5 +1,7 @@
 [Unit]
 Description=Symphony daily projects report
+StartLimitIntervalSec=1h
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -7,4 +9,6 @@ WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/npx tsx src/projects-report.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
-TimeoutStartSec=600
+TimeoutStartSec=3600
+Restart=on-failure
+RestartSec=15min

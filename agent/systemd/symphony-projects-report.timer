@@ -2,7 +2,7 @@
 Description=Symphony daily projects report
 
 [Timer]
-OnCalendar=*-*-* 08:10:00
+OnCalendar=*-*-* 14:30:00 Europe/Madrid
 Persistent=true
 
 [Install]
