@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 
 const NVM_PATH = "/home/gcalleja/.nvm/versions/node/v24.16.0/bin";
+const AGENT_MAX_RUNTIME_MS = Number(process.env.AGENT_MAX_RUNTIME_MS ?? "5400000");
 
 export const AGENT_ENV = {
   ...process.env,
@@ -45,6 +46,8 @@ async function runProcess(command: string, args: string[], cwd: string): Promise
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; proc.kill("SIGTERM"); }, AGENT_MAX_RUNTIME_MS);
     proc.stdout?.on("data", (d: Buffer) => {
       const text = d.toString();
       stdout += text;
@@ -56,7 +59,7 @@ async function runProcess(command: string, args: string[], cwd: string): Promise
       process.stderr.write(d);
     });
 
-    proc.on("close", (code) => resolve({ code, stdout, stderr }));
+    proc.on("close", (code) => { clearTimeout(timeout); resolve({ code, stdout, stderr: timedOut ? stderr + "\nAGENT_RUNTIME_LIMIT_EXCEEDED" : stderr }); });
     proc.on("error", reject);
   });
 }
@@ -230,6 +233,7 @@ ${promptTail}
 async function failCodexRun(context: string, prompt: string, cwd: string, result: ProcessResult): Promise<never> {
   const limitKind = classifyCodexLimit(result);
   const output = tail(combinedOutput(result));
+  if (output.includes("AGENT_RUNTIME_LIMIT_EXCEEDED")) { const handoffPath = await writeCodexHandoff(prompt, cwd, result, "session"); throw new Error(`${context} exceeded the 90-minute budget. Handoff written to ${handoffPath}.`); }
   if (limitKind === "session") {
     const handoffPath = await writeCodexHandoff(prompt, cwd, result, limitKind);
     throw new Error(`${context} hit a session/tab/context Codex limit. Handoff written to ${handoffPath}. Start a fresh Codex session in the same workspace and resume from CODEX_HANDOFF.md. Last output: ${output}`);
