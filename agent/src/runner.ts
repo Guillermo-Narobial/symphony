@@ -376,7 +376,7 @@ async function deployToQdevweb(branch: string, workDir: string): Promise<string 
   return port;
 }
 
-export async function addDeployUrlToPr(branch: string, deployUrl: string, containerName: string): Promise<void> {
+export async function addDeployUrlToPr(branch: string, deployUrl: string, containerName = deployContainerName(branch)): Promise<void> {
   const [owner] = config.repo.split("/");
   const head = encodeURIComponent(`${owner}:${branch}`);
   const { stdout } = await exec("gh", [
