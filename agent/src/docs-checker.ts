@@ -1,17 +1,37 @@
 import "dotenv/config";
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
-import { resolve, join } from "node:path";
-import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { config } from "./config.js";
-import { notifyRejectionEmail } from "./notifier-email.js";
+import { notifyEmail } from "./notifier-email.js";
 
 const exec = promisify(execFile);
 
 const SOURCE_REPO_DIR = resolve(config.frontendRepoDir);
 const BRANCH = "hotfix-master";
 const LABEL = "docs:jsdoc";
+const MAX_FILES = positiveInteger(process.env.DOCS_MAX_FILES, 3);
+const FILE_TIMEOUT_MS = positiveInteger(process.env.DOCS_FILE_TIMEOUT_MS, 240_000);
+const DRY_RUN = process.env.DOCS_DRY_RUN === "1";
+
+interface RepoHandle {
+  workDir: string;
+  enablePush: () => Promise<void>;
+  cleanup: () => Promise<void>;
+}
+
+interface UndocumentedItem {
+  file: string;
+  line: number;
+  code: string;
+}
+
+function positiveInteger(rawValue: string | undefined, fallback: number): number {
+  const value = Number(rawValue ?? fallback);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await exec("git", args, {
@@ -23,228 +43,276 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function prepareRepo(): Promise<{ workDir: string; cleanup: () => Promise<void> }> {
+async function prepareRepo(): Promise<RepoHandle> {
   const tempRoot = await mkdtemp(join(tmpdir(), "symphony-docs-"));
   const workDir = join(tempRoot, "Narobial-Frontend");
   const originUrl = await git(SOURCE_REPO_DIR, "config", "--get", "remote.origin.url");
 
-  await exec("git", ["clone", "--no-local", "--branch", BRANCH, "--single-branch", SOURCE_REPO_DIR, workDir], {
-    maxBuffer: 1024 * 1024 * 20,
-    timeout: 300_000,
-    env: process.env,
-  });
-  await git(workDir, "remote", "set-url", "origin", originUrl);
-  await git(workDir, "fetch", "origin", BRANCH, "--prune");
-  await git(workDir, "checkout", BRANCH);
-  await git(workDir, "reset", "--hard", `origin/${BRANCH}`);
+  try {
+    await exec("git", ["clone", "--no-local", "--branch", BRANCH, "--single-branch", SOURCE_REPO_DIR, workDir], {
+      maxBuffer: 1024 * 1024 * 20,
+      timeout: 300_000,
+      env: process.env,
+    });
+    await git(workDir, "remote", "set-url", "origin", originUrl);
+    await git(workDir, "fetch", "origin", BRANCH, "--prune");
+    await git(workDir, "reset", "--hard", `origin/${BRANCH}`);
 
-  return {
-    workDir,
-    cleanup: async () => {
-      await rm(tempRoot, { recursive: true, force: true });
-    },
-  };
+    // Codex can edit the clone, but cannot publish anything while generating docs.
+    await git(workDir, "remote", "set-url", "--push", "origin", "disabled://symphony-docs");
+
+    return {
+      workDir,
+      enablePush: async () => {
+        await git(workDir, "remote", "set-url", "--push", "origin", originUrl);
+      },
+      cleanup: async () => {
+        await rm(tempRoot, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await rm(tempRoot, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function getRecentFiles(workDir: string): Promise<string[]> {
   const { stdout } = await exec("git", [
     "log", "--since=7.days", "--diff-filter=AM", "--name-only", "--pretty=format:",
-  ], { cwd: workDir });
+  ], { cwd: workDir, timeout: 60_000 });
 
-  const files = [...new Set(stdout.split("\n").filter((f) => f.endsWith(".ts") && f.startsWith("src/app/") && !f.includes(".spec.")))];
-  return files;
+  return [...new Set(stdout.split("\n").filter((file) =>
+    file.endsWith(".ts") && file.startsWith("src/app/") && !file.includes(".spec."),
+  ))];
 }
 
 function hasJSDocAbove(lines: string[], index: number): boolean {
   for (let i = index - 1; i >= 0; i -= 1) {
     const trimmed = lines[i].trim();
     if (trimmed === "") continue;
-    if (trimmed.endsWith("*/")) return true;
-    if (trimmed.startsWith("@") || trimmed.startsWith("//")) return false;
-    return false;
+    return trimmed.endsWith("*/");
   }
   return false;
-}
-
-interface UndocumentedItem {
-  file: string;
-  line: number;
-  code: string;
 }
 
 async function findUndocumented(workDir: string, files: string[]): Promise<UndocumentedItem[]> {
   const items: UndocumentedItem[] = [];
   const patterns = [
-    /export\s+(function|class|interface|type|enum)\s+\w+/,
-    /^\s+(public|protected)\s+\w+\s*\(/,
-    /^\s+\w+\s*\([^)]*\)\s*[:{]/,
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum|const)\s+\w+/,
+    /^\s+(?:public|protected)\s+(?:async\s+)?(?:get\s+|set\s+)?\w+\s*\(/,
   ];
 
   for (const file of files) {
     try {
-      const content = await readFile(resolve(workDir, file), "utf-8");
+      const content = await readFile(resolve(workDir, file), "utf8");
       const lines = content.split("\n");
 
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
-        if (patterns.some((p) => p.test(line)) && !hasJSDocAbove(lines, i)) {
+        if (patterns.some((pattern) => pattern.test(line)) && !hasJSDocAbove(lines, i)) {
           items.push({ file, line: i + 1, code: line.trim() });
         }
       }
-    } catch {}
+    } catch (error) {
+      console.warn(`⚠️ No se pudo analizar ${file}: ${(error as Error).message}`);
+    }
   }
 
   return items;
 }
 
-async function generateDocs(workDir: string, items: UndocumentedItem[]): Promise<string[]> {
+function withoutJSDoc(source: string): string {
+  return source
+    .replace(/\/\*\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "")
+    .join("\n");
+}
+
+function jsDocCount(source: string): number {
+  return source.match(/\/\*\*[\s\S]*?\*\//g)?.length ?? 0;
+}
+
+function isDocumentationOnlyChange(before: string, after: string): boolean {
+  return withoutJSDoc(before) === withoutJSDoc(after) && jsDocCount(after) > jsDocCount(before);
+}
+
+async function restoreUnstagedChanges(workDir: string): Promise<void> {
+  const changed = (await git(workDir, "diff", "--name-only")).split("\n").filter(Boolean);
+  if (changed.length > 0) await git(workDir, "restore", "--worktree", "--", ...changed);
+
+  const untracked = (await git(workDir, "ls-files", "--others", "--exclude-standard")).split("\n").filter(Boolean);
+  for (const file of untracked) {
+    await rm(resolve(workDir, file), { recursive: true, force: true });
+  }
+}
+
+async function runCodexForFile(workDir: string, file: string, items: UndocumentedItem[]): Promise<boolean> {
+  const filePath = resolve(workDir, file);
+  const before = await readFile(filePath, "utf8");
+  const declarations = items.map((item) => `L${item.line}: ${item.code}`).join("\n");
+  const prompt = `Edita exclusivamente el archivo ${file} y añade JSDoc a estas declaraciones:\n${declarations}\n\nReglas obligatorias:\n- Solo puedes añadir bloques /** ... */ encima de las declaraciones indicadas.\n- Incluye @param y @returns únicamente cuando correspondan.\n- No cambies código, imports, formato ni tests.\n- No ejecutes git, no hagas commit, push ni crees archivos.\n- Termina tras guardar el archivo.`;
+
+  try {
+    await exec("codex", [
+      "exec",
+      "--ephemeral",
+      "--color", "never",
+      "--sandbox", "workspace-write",
+      "-C", workDir,
+      prompt,
+    ], {
+      cwd: workDir,
+      timeout: FILE_TIMEOUT_MS,
+      killSignal: "SIGTERM",
+      maxBuffer: 1024 * 1024 * 20,
+      env: process.env,
+    });
+
+    const changed = (await git(workDir, "diff", "--name-only")).split("\n").filter(Boolean);
+    if (changed.some((changedFile) => changedFile !== file)) {
+      throw new Error(`Codex modificó archivos fuera de alcance: ${changed.filter((changedFile) => changedFile !== file).join(", ")}`);
+    }
+
+    const after = await readFile(filePath, "utf8");
+    if (!isDocumentationOnlyChange(before, after)) {
+      throw new Error("el diff contiene cambios fuera de bloques JSDoc o no añadió documentación");
+    }
+
+    await git(workDir, "add", "--", file);
+    console.log(`✅ JSDoc validado: ${file}`);
+    return true;
+  } catch (error) {
+    console.error(`⚠️ Se descarta ${file}: ${(error as Error).message}`);
+    await restoreUnstagedChanges(workDir);
+    return false;
+  }
+}
+
+async function generateDocs(workDir: string, items: UndocumentedItem[]): Promise<{ modifiedFiles: string[]; selectedItems: UndocumentedItem[] }> {
   const byFile = new Map<string, UndocumentedItem[]>();
   for (const item of items) {
-    const list = byFile.get(item.file) || [];
+    const list = byFile.get(item.file) ?? [];
     list.push(item);
     byFile.set(item.file, list);
   }
 
+  const selected = [...byFile.entries()].slice(0, MAX_FILES);
+  const selectedItems = selected.flatMap(([, fileItems]) => fileItems);
+  console.log(`🎯 Se procesarán ${selected.length}/${byFile.size} archivos (máximo ${MAX_FILES})`);
+
+  if (DRY_RUN) return { modifiedFiles: [], selectedItems };
+
   const modifiedFiles: string[] = [];
-
-  for (const [file, fileItems] of byFile) {
-    const filePath = resolve(workDir, file);
-    const lines = fileItems.map((i) => `L${i.line}: ${i.code}`).join("\n");
-
-    const prompt = `Lee el archivo "${file}" y añade JSDoc (/** ... */) a estas funciones/interfaces/métodos que no lo tienen:\n${lines}\n\nReglas:\n- Solo añade el bloque /** */ encima de cada declaración\n- Incluye @param, @returns donde aplique\n- Para interfaces, documenta el propósito y cada propiedad\n- No modifiques el código, solo añade documentación\n- Responde SOLO con el archivo completo modificado, sin explicaciones`;
-
-    try {
-      const output = await runKiro(prompt, workDir);
-      if (output.trim()) {
-        await writeFile(filePath, output);
-        modifiedFiles.push(file);
-      }
-    } catch (err) {
-      console.error(`  ⚠️ Error documentando ${file}:`, err);
-    }
+  for (const [file, fileItems] of selected) {
+    if (await runCodexForFile(workDir, file, fileItems)) modifiedFiles.push(file);
   }
 
-  return modifiedFiles;
-}
-
-async function runKiro(prompt: string, workDir: string): Promise<string> {
-  return new Promise((ok, fail) => {
-    let stdout = "";
-    const proc = spawn("kiro-cli", ["chat", "--no-interactive", "--trust-all-tools", "--wrap", "never", prompt], {
-      cwd: workDir,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d: Buffer) => process.stderr.write(d));
-    proc.on("close", (code) => {
-      if (code === 0) ok(stdout);
-      else fail(new Error(`kiro-cli exited ${code}`));
-    });
-    proc.on("error", fail);
-  });
-}
-
-async function createPR(workDir: string, modifiedFiles: string[], items: UndocumentedItem[]): Promise<string | null> {
-  const date = new Date().toISOString().slice(0, 10);
-  const prBranch = `docs/jsdoc-${date}`;
-
-  const { stdout: diff } = await exec("git", ["diff", "--stat"], { cwd: workDir });
-  if (!diff.trim()) return null;
-
-  await git(workDir, "checkout", "-b", prBranch);
-  await git(workDir, "add", ...modifiedFiles);
-  await git(workDir, "commit", "-m", `docs: añadir JSDoc a ${modifiedFiles.length} archivos`);
-  await git(workDir, "push", "-u", "origin", prBranch);
-
-  const body = buildPRBody(items, modifiedFiles);
-
-  try {
-    await exec("gh", ["label", "create", LABEL, "-R", config.repo, "--color", "0075CA"], { timeout: 10_000 });
-  } catch {}
-
-  const { stdout: prUrl } = await exec("gh", [
-    "pr", "create", "-R", config.repo,
-    "--base", BRANCH,
-    "--head", prBranch,
-    "--title", `docs: JSDoc automático ${date}`,
-    "--body", body,
-    "--label", LABEL,
-    "--assignee", config.rejectAssignee,
-  ]);
-
-  await git(workDir, "checkout", BRANCH);
-
-  return prUrl.trim();
+  return { modifiedFiles, selectedItems };
 }
 
 function buildPRBody(items: UndocumentedItem[], modifiedFiles: string[]): string {
-  const fileList = modifiedFiles.map((f) => `- \`${f}\``).join("\n");
-  const examples = items.slice(0, 10).map((i) => `| \`${i.file}\` | L${i.line} | \`${i.code.slice(0, 60)}\` |`).join("\n");
+  const modifiedSet = new Set(modifiedFiles);
+  const documentedItems = items.filter((item) => modifiedSet.has(item.file));
+  const fileList = modifiedFiles.map((file) => `- \`${file}\``).join("\n");
+  const examples = documentedItems.slice(0, 10).map((item) =>
+    `| \`${item.file}\` | L${item.line} | \`${item.code.slice(0, 60)}\` |`,
+  ).join("\n");
 
-  return `## 📝 Documentación JSDoc automática
+  return `## Documentación JSDoc automática con Codex
 
 ### Archivos documentados (${modifiedFiles.length})
 
 ${fileList}
 
-### Elementos documentados (${items.length} total)
+### Declaraciones documentadas (${documentedItems.length})
 
-| Archivo | Línea | Declaración |
-|---------|-------|-------------|
+| Archivo | Línea original | Declaración |
+|---------|----------------|-------------|
 ${examples}
 
-### Verificación requerida
+### Controles aplicados
 
-- [ ] JSDoc es correcto y coherente
-- [ ] No se ha modificado lógica de negocio
-- [ ] Build pasa sin errores
+- [x] Timeout independiente por archivo
+- [x] Solo se aceptan cambios dentro de bloques JSDoc
+- [x] Push deshabilitado durante la ejecución de Codex
+- [ ] Revisión humana de exactitud semántica
 
 ---
 _Generado por symphony-agent docs-checker._`;
 }
 
+async function createPR(repo: RepoHandle, modifiedFiles: string[], items: UndocumentedItem[]): Promise<string | null> {
+  const { workDir } = repo;
+  const { stdout: diff } = await exec("git", ["diff", "--cached", "--stat"], { cwd: workDir });
+  if (!diff.trim()) return null;
+
+  const date = new Date().toISOString().slice(0, 10);
+  const prBranch = `docs/jsdoc-${date}`;
+  await git(workDir, "checkout", "-b", prBranch);
+  await git(workDir, "commit", "-m", `docs: añadir JSDoc a ${modifiedFiles.length} archivos`);
+  await repo.enablePush();
+  await git(workDir, "push", "-u", "origin", prBranch);
+
+  try {
+    await exec("gh", ["label", "create", LABEL, "-R", config.repo, "--color", "0075CA"], { timeout: 10_000 });
+  } catch {
+    // The label usually already exists.
+  }
+
+  const { stdout: prUrl } = await exec("gh", [
+    "pr", "create", "-R", config.repo,
+    "--base", BRANCH,
+    "--head", prBranch,
+    "--title", `docs: JSDoc automático con Codex ${date}`,
+    "--body", buildPRBody(items, modifiedFiles),
+    "--label", LABEL,
+    "--assignee", config.rejectAssignee,
+  ], { timeout: 60_000 });
+
+  return prUrl.trim();
+}
+
 async function main(): Promise<void> {
-  console.log("📝 Agente de documentación — inicio");
+  console.log(`📝 Agente de documentación Codex — inicio${DRY_RUN ? " (dry-run)" : ""}`);
   const repo = await prepareRepo();
 
   try {
     const files = await getRecentFiles(repo.workDir);
-    console.log(`📂 ${files.length} archivos .ts modificados en los últimos 7 días`);
-
-    if (files.length === 0) {
-      console.log("✅ Sin archivos nuevos que documentar");
-      return;
-    }
+    console.log(`📂 ${files.length} archivos TypeScript modificados en los últimos 7 días`);
+    if (files.length === 0) return;
 
     const items = await findUndocumented(repo.workDir, files);
-    console.log(`🔍 ${items.length} funciones/interfaces/métodos sin JSDoc`);
+    console.log(`🔍 ${items.length} declaraciones públicas/exportadas sin JSDoc`);
+    if (items.length === 0) return;
 
-    if (items.length === 0) {
-      console.log("✅ Todo documentado correctamente");
+    const { modifiedFiles, selectedItems } = await generateDocs(repo.workDir, items);
+    if (DRY_RUN) {
+      console.log(`✅ Dry-run correcto: ${selectedItems.length} declaraciones candidatas`);
       return;
     }
-
-    const modifiedFiles = await generateDocs(repo.workDir, items);
-    console.log(`✏️ ${modifiedFiles.length} archivos documentados`);
-
     if (modifiedFiles.length === 0) {
-      console.log("⚠️ No se pudo generar documentación");
+      console.log("⚠️ Codex no produjo cambios JSDoc válidos");
       return;
     }
 
-    const prUrl = await createPR(repo.workDir, modifiedFiles, items);
+    const prUrl = await createPR(repo, modifiedFiles, selectedItems);
     if (prUrl) {
       console.log(`🔗 PR creada: ${prUrl}`);
-      await notifyRejectionEmail("DOCS", `Se ha creado una PR de documentación JSDoc:\n\n${prUrl}\n\n${modifiedFiles.length} archivos, ${items.length} elementos documentados.`);
+      await notifyEmail(
+        `📝 [Symphony] PR de documentación Codex — ${new Date().toISOString().slice(0, 10)}`,
+        `<h2>PR de documentación JSDoc</h2><p><a href="${prUrl}">${prUrl}</a></p><p>${modifiedFiles.length} archivos validados como cambios exclusivos de JSDoc.</p>`,
+      );
     }
-
-    console.log("🏁 Agente de documentación completado");
   } finally {
     await repo.cleanup();
   }
+
+  console.log("🏁 Agente de documentación completado");
 }
 
-main().catch((err) => {
-  console.error("❌ Error en docs-checker:", err);
+main().catch((error) => {
+  console.error("❌ Error en docs-checker:", error);
   process.exit(1);
 });

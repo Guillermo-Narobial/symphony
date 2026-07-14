@@ -5,6 +5,10 @@ Description=Symphony weekly documentation checker runner
 Type=oneshot
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DOCS_MAX_FILES=3
+Environment=DOCS_FILE_TIMEOUT_MS=240000
 ExecStart=/usr/bin/npx tsx src/docs-checker.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
 TimeoutStartSec=1800
+MemoryMax=4G
+CPUQuota=100%
