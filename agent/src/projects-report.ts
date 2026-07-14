@@ -204,7 +204,7 @@ ${rows}
     html += `<p>Sin proyectos</p>`;
   } else {
     const rows = devExpired
-      .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${p.analystDeveloperId.replace(/²/g, ", ")}</td><td>${p.estimatedDevelopmentEndDate}</td></tr>`)
+      .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${getResourceIds(p)}</td><td>${p.estimatedDevelopmentEndDate}</td></tr>`)
       .join("");
     html += `<table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Título</th><th>Desarrollador</th><th>Fecha estimada fin</th></tr>
