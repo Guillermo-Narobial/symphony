@@ -263,7 +263,7 @@ export async function runAgent(
 
   if (port) {
     const deployUrl = `https://${config.deployHost}:${port}`;
-    await addDeployUrlToPr(branch, deployUrl);
+    await addDeployUrlToPr(branch, deployUrl, deployContainerName(branch));
   }
 }
 
@@ -376,7 +376,7 @@ async function deployToQdevweb(branch: string, workDir: string): Promise<string 
   return port;
 }
 
-export async function addDeployUrlToPr(branch: string, deployUrl: string): Promise<void> {
+export async function addDeployUrlToPr(branch: string, deployUrl: string, containerName: string): Promise<void> {
   const [owner] = config.repo.split("/");
   const head = encodeURIComponent(`${owner}:${branch}`);
   const { stdout } = await exec("gh", [
@@ -390,11 +390,13 @@ export async function addDeployUrlToPr(branch: string, deployUrl: string): Promi
 
   const pr = prs[0];
   const currentBody = pr.body ?? "";
-  const deploySection = `\n\n## 🚀 Deploy de prueba\n\n🔗 ${deployUrl}`;
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const destroyCommand = `ssh -i ${config.deploySshKey} root@${config.deployHost} \"docker rm -f ${containerName}\"`;
+  const deploySection = `\n\n## 🚀 Deploy de prueba\n\n- URL: ${deployUrl}\n- Healthcheck: ✅ contenedor Docker iniciado con healthcheck HTTPS\n- Caduca: ${expiresAt} (limpieza automática a los 7 días)\n- Destrucción manual: \`${destroyCommand}\``;
 
   if (currentBody.includes(deployUrl)) return;
 
-  const newBody = currentBody.replace(/\n\n## 🚀 Deploy de prueba\n\n🔗 .+/, "") + deploySection;
+  const newBody = currentBody.replace(/\n\n## 🚀 Deploy de prueba[\s\S]*$/, "") + deploySection;
   await exec("gh", [
     "api",
     "-X", "PATCH",
