@@ -241,6 +241,17 @@ async function commitAndPushIfChanged(content: string): Promise<void> {
   await mkdir(dirname(absoluteGlossaryPath), { recursive: true });
   await writeFile(absoluteGlossaryPath, content, "utf-8");
 
+  // Guarda de seguridad: abortar si se detectan cambios en archivos i18n.
+  // Este script NUNCA debe escribir en src/assets/i18n/*.json — solo en docs/translation-glossary.md.
+  const unexpectedChanges = await git("diff", "--name-only", "--", "src/assets/i18n/");
+  if (unexpectedChanges) {
+    throw new Error(
+      `ABORTADO: Se detectaron cambios inesperados en archivos i18n. ` +
+      `Este script solo debe modificar ${GLOSSARY_FILE}. ` +
+      `Archivos afectados:\n${unexpectedChanges}`
+    );
+  }
+
   try {
     await git("diff", "--quiet", "--", GLOSSARY_FILE);
     console.log("Glosario sin cambios; no se crea commit.");
