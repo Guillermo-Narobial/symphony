@@ -18,6 +18,7 @@ import { fetchHorarioEmpleado } from "./qusuarios-query.js";
 import { fetchNombrePorIdp } from "./qusuarios-query.js";
 import { findEmpleadosByName } from "./qusuarios-query.js";
 import { fetchQfichaje } from "./qfichaje-query.js";
+import { runMergePr } from "./merge-pr.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -173,6 +174,7 @@ Comandos disponibles:
 /email <dest> | <asunto> | <cuerpo> — Enviar email
 /create <título> | <descripción> — Crear issue y lanzar agente
 /validarprs <número_pr> — Aprobar y mergear PR con bypass
+/merge <número_pr> — Merge a hotfix-master resolviendo conflictos con IA
 /help — Esta ayuda
 
 Para /create, separa título y cuerpo con |
@@ -502,6 +504,56 @@ async function cmdValidarPrs(input: string): Promise<string> {
   }
 }
 
+// --- Merge de PR con resolución de conflictos por IA (background + status) ---
+
+const STATUS_INTERVAL_MS = 60_000;
+/** PRs que se están mergeando ahora mismo (evita duplicados). */
+const mergesInFlight = new Set<number>();
+
+/**
+ * Lanza el merge en background: responde de inmediato, envía status cada 60s
+ * mientras corre y un mensaje final al terminar. No mantiene la petición abierta.
+ */
+function cmdMerge(chatId: string, input: string): string {
+  const arg = input.trim();
+  if (!/^\d+$/.test(arg)) {
+    return "❓ Uso: /merge <número_pr>\nEjemplo: /merge 2056";
+  }
+  const prNumber = Number(arg);
+
+  if (mergesInFlight.has(prNumber)) {
+    return `⏳ La PR #${prNumber} ya se está mergeando ahora mismo.`;
+  }
+  mergesInFlight.add(prNumber);
+
+  // Estado actual (última fase reportada) para el status periódico.
+  let phase = "iniciando";
+  const onStatus = (p: string) => { phase = p; };
+
+  // Arranca el trabajo en background sin bloquear el polling.
+  void (async () => {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const mins = Math.floor((Date.now() - startedAt) / 60_000);
+      void sendMessage(chatId, `⏳ Merge PR #${prNumber} en curso (${mins} min) — ${phase}...`);
+    }, STATUS_INTERVAL_MS);
+
+    try {
+      const result = await runMergePr(prNumber, onStatus);
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+      const head = result.ok ? "✅ *Merge completado*" : "❌ *Merge no completado*";
+      await sendMessage(chatId, `${head}\n\n${result.summary}\n\n⏱️ ${secs}s`);
+    } catch (err) {
+      await sendMessage(chatId, `❌ *Error en merge PR #${prNumber}*\n\n${(err as Error).message}`);
+    } finally {
+      clearInterval(interval);
+      mergesInFlight.delete(prNumber);
+    }
+  })();
+
+  return `🔀 Iniciando merge de la PR #${prNumber} contra hotfix-master.\nTe aviso del progreso cada 60s y al terminar.`;
+}
+
 // --- Natural language intent detection ---
 
 interface DetectedIntent {
@@ -702,6 +754,9 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/validarprs":
       response = await cmdValidarPrs(argStr);
       break;
+    case "/merge":
+      response = cmdMerge(chatId, argStr);
+      break;
     default:
       // Si no es un comando, usar detección de intenciones + LLM fallback
       if (trimmed.startsWith("/")) {
@@ -767,6 +822,7 @@ export function startTelegramBot(): void {
       { command: "email", description: "Enviar email (dest | asunto | cuerpo)" },
       { command: "create", description: "Crear issue y lanzar agente" },
       { command: "validarprs", description: "Aprobar y mergear PR con bypass" },
+      { command: "merge", description: "Merge a hotfix-master resolviendo conflictos con IA" },
       { command: "help", description: "Mostrar ayuda" },
     ],
   }).catch(() => { /* non-critical */ });
