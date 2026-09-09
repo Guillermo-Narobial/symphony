@@ -14,6 +14,7 @@ import { config } from "./config.js";
 import { getRunningIssues } from "./solver.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
 import { fetchQabiertos } from "./q700-query.js";
+import { fetchHorarioEmpleado } from "./qusuarios-query.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -162,6 +163,8 @@ Comandos disponibles:
 /failures [n] — Últimos N fallos
 /running — Issues en ejecución ahora
 /prs — PRs abiertas en el repo
+/Qabiertos — Q700 Narobial en estado Q1
+/horarioEmpleado <nombre> — Horario de un empleado
 /config — Configuración activa
 /email <dest> | <asunto> | <cuerpo> — Enviar email
 /create <título> | <descripción> — Crear issue y lanzar agente
@@ -207,6 +210,34 @@ async function cmdQabiertos(): Promise<string> {
     return msg.slice(0, 3900);
   } catch (err) {
     return `❌ Error consultando Q700: ${(err as Error).message}`;
+  }
+}
+
+// --- Horario de empleado (GET.QUSUARIOS) ---
+
+async function cmdHorarioEmpleado(query: string): Promise<string> {
+  if (!query) {
+    return "❓ Uso: /horarioEmpleado <nombre>\nEjemplo: /horarioEmpleado Guillermo";
+  }
+
+  try {
+    const empleados = await fetchHorarioEmpleado(query);
+
+    if (empleados.length === 0) {
+      return `🔍 Sin resultados para: "${query}"`;
+    }
+
+    let msg = `🕐 *Horario de empleados* ("${query}") — ${empleados.length}:\n\n`;
+    for (const e of empleados) {
+      msg += `👤 *${e.name ?? "—"}*\n`;
+      msg += `   🕐 Horario: ${e.schedule ?? "no disponible"}\n`;
+      if (e.email) msg += `   ✉️ ${e.email}\n`;
+      if (e.telephone) msg += `   📞 Ext. ${e.telephone}\n`;
+      msg += `\n`;
+    }
+    return msg.slice(0, 3900);
+  } catch (err) {
+    return `❌ Error consultando horario: ${(err as Error).message}`;
   }
 }
 
@@ -575,6 +606,9 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/qabiertos":
       response = await cmdQabiertos();
       break;
+    case "/horarioempleado":
+      response = await cmdHorarioEmpleado(argStr);
+      break;
     case "/prs":
       response = await cmdPrs(argStr || undefined);
       break;
@@ -642,6 +676,7 @@ export function startTelegramBot(): void {
       { command: "status", description: "Estado del sistema" },
       { command: "prs", description: "PRs abiertas en el repo" },
       { command: "qabiertos", description: "Q700 Narobial en estado Q1" },
+      { command: "horarioempleado", description: "Horario de un empleado (por nombre)" },
       { command: "running", description: "Issues en ejecución ahora" },
       { command: "search", description: "Buscar en historial de decisiones" },
       { command: "history", description: "Últimas N entradas del changelog" },
