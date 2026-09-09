@@ -15,6 +15,7 @@ import { getRunningIssues } from "./solver.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
 import { fetchQabiertos } from "./q700-query.js";
 import { fetchHorarioEmpleado } from "./qusuarios-query.js";
+import { fetchQfichaje } from "./qfichaje-query.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -165,6 +166,7 @@ Comandos disponibles:
 /prs — PRs abiertas en el repo
 /Qabiertos — Q700 Narobial en estado Q1
 /horarioEmpleado <nombre> — Horario de un empleado
+/qfichaje <idp> — Último fichaje de un empleado por IDP
 /config — Configuración activa
 /email <dest> | <asunto> | <cuerpo> — Enviar email
 /create <título> | <descripción> — Crear issue y lanzar agente
@@ -238,6 +240,45 @@ async function cmdHorarioEmpleado(query: string): Promise<string> {
     return msg.slice(0, 3900);
   } catch (err) {
     return `❌ Error consultando horario: ${(err as Error).message}`;
+  }
+}
+
+// --- Último fichaje por IDP (GET.QFICHAJE) ---
+
+async function cmdQfichaje(idp: string): Promise<string> {
+  const clean = idp.trim();
+  if (!clean) {
+    return "❓ Uso: /qfichaje <idp>\nEjemplo: /qfichaje 23";
+  }
+
+  try {
+    const result = await fetchQfichaje(clean);
+
+    // Cerrado / sin fichaje hoy / idp inválido → mensaje del DMS
+    if (!result.ok || !result.fichaje) {
+      return `🕑 *Fichaje (IDP ${clean})*\n\nℹ️ ${result.message ?? "Sin datos de fichaje."}`;
+    }
+
+    const f = result.fichaje;
+    const ci = f.checkIn?.[0];
+    let msg = `🕑 *Fichaje (IDP ${clean})*\n\n`;
+    msg += `${f.isCheckInActive ? "🟢 Fichaje activo" : "🔴 Fichaje cerrado"}\n`;
+    if (f.id) msg += `📋 Tarea: \`${f.id}\`\n`;
+
+    if (ci) {
+      if (ci.dateIn || ci.timeIn) msg += `➡️ Entrada: ${ci.dateIn ?? ""} ${ci.timeIn ?? ""}\n`;
+      if (ci.dateOut || ci.timeOut) msg += `⬅️ Salida: ${ci.dateOut ?? ""} ${ci.timeOut ?? ""}\n`;
+    }
+
+    const tipos: string[] = [];
+    if (f.isCheckedInToProject) tipos.push("Proyecto");
+    if (f.isCheckedInToQ700) tipos.push("Q700");
+    if (f.isCheckedInToManualTask) tipos.push("Tarea manual");
+    if (tipos.length > 0) msg += `🏷️ Tipo: ${tipos.join(", ")}\n`;
+
+    return msg.slice(0, 3900);
+  } catch (err) {
+    return `❌ Error consultando fichaje: ${(err as Error).message}`;
   }
 }
 
@@ -609,6 +650,9 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/horarioempleado":
       response = await cmdHorarioEmpleado(argStr);
       break;
+    case "/qfichaje":
+      response = await cmdQfichaje(argStr);
+      break;
     case "/prs":
       response = await cmdPrs(argStr || undefined);
       break;
@@ -677,6 +721,7 @@ export function startTelegramBot(): void {
       { command: "prs", description: "PRs abiertas en el repo" },
       { command: "qabiertos", description: "Q700 Narobial en estado Q1" },
       { command: "horarioempleado", description: "Horario de un empleado (por nombre)" },
+      { command: "qfichaje", description: "Último fichaje de un empleado (por IDP)" },
       { command: "running", description: "Issues en ejecución ahora" },
       { command: "search", description: "Buscar en historial de decisiones" },
       { command: "history", description: "Últimas N entradas del changelog" },
