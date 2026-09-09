@@ -15,6 +15,8 @@ import { getRunningIssues } from "./solver.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
 import { fetchQabiertos } from "./q700-query.js";
 import { fetchHorarioEmpleado } from "./qusuarios-query.js";
+import { fetchNombrePorIdp } from "./qusuarios-query.js";
+import { findEmpleadosByName } from "./qusuarios-query.js";
 import { fetchQfichaje } from "./qfichaje-query.js";
 import nodemailer from "nodemailer";
 
@@ -166,7 +168,7 @@ Comandos disponibles:
 /prs — PRs abiertas en el repo
 /Qabiertos — Q700 Narobial en estado Q1
 /horarioEmpleado <nombre> — Horario de un empleado
-/qfichaje <idp> — Último fichaje de un empleado por IDP
+/qfichaje <idp|nombre> — Último fichaje de un empleado (por IDP o nombre)
 /config — Configuración activa
 /email <dest> | <asunto> | <cuerpo> — Enviar email
 /create <título> | <descripción> — Crear issue y lanzar agente
@@ -243,40 +245,75 @@ async function cmdHorarioEmpleado(query: string): Promise<string> {
   }
 }
 
-// --- Último fichaje por IDP (GET.QFICHAJE) ---
+// --- Último fichaje por IDP o nombre (GET.QFICHAJE) ---
 
-async function cmdQfichaje(idp: string): Promise<string> {
-  const clean = idp.trim();
+/** Formatea el fichaje de un idp concreto (nombre ya resuelto). */
+async function formatQfichaje(idp: string, nombre: string | null): Promise<string> {
+  const result = await fetchQfichaje(idp);
+  const header = `🕑 *Fichaje (IDP ${idp})*${nombre ? `\n👤 ${nombre}` : ""}\n\n`;
+
+  // Cerrado / sin fichaje hoy / idp inválido → mensaje del DMS
+  if (!result.ok || !result.fichaje) {
+    return `${header}ℹ️ ${result.message ?? "Sin datos de fichaje."}`;
+  }
+
+  const f = result.fichaje;
+  const ci = f.checkIn?.[0];
+  let msg = header;
+  msg += `${f.isCheckInActive ? "🟢 Fichaje activo" : "🔴 Fichaje cerrado"}\n`;
+  if (f.id) msg += `📋 Tarea: \`${f.id}\`\n`;
+
+  if (ci) {
+    if (ci.dateIn || ci.timeIn) msg += `➡️ Entrada: ${ci.dateIn ?? ""} ${ci.timeIn ?? ""}\n`;
+    if (ci.dateOut || ci.timeOut) msg += `⬅️ Salida: ${ci.dateOut ?? ""} ${ci.timeOut ?? ""}\n`;
+  }
+
+  const tipos: string[] = [];
+  if (f.isCheckedInToProject) tipos.push("Proyecto");
+  if (f.isCheckedInToQ700) tipos.push("Q700");
+  if (f.isCheckedInToManualTask) tipos.push("Tarea manual");
+  if (tipos.length > 0) msg += `🏷️ Tipo: ${tipos.join(", ")}\n`;
+
+  return msg.slice(0, 3900);
+}
+
+/**
+ * /qfichaje admite un IDP numérico (/qfichaje 23) o un nombre (/qfichaje BASMA).
+ * Con nombre, resuelve el idp vía GET.QUSUARIOS; si hay varias coincidencias,
+ * lista las opciones para que el usuario elija por idp.
+ */
+async function cmdQfichaje(arg: string): Promise<string> {
+  const clean = arg.trim();
   if (!clean) {
-    return "❓ Uso: /qfichaje <idp>\nEjemplo: /qfichaje 23";
+    return "❓ Uso: /qfichaje <idp o nombre>\nEjemplos: /qfichaje 23  ·  /qfichaje BASMA";
   }
 
   try {
-    const result = await fetchQfichaje(clean);
-
-    // Cerrado / sin fichaje hoy / idp inválido → mensaje del DMS
-    if (!result.ok || !result.fichaje) {
-      return `🕑 *Fichaje (IDP ${clean})*\n\nℹ️ ${result.message ?? "Sin datos de fichaje."}`;
+    // Caso 1: es un IDP numérico → uso directo.
+    if (/^\d+$/.test(clean)) {
+      const nombre = await fetchNombrePorIdp(clean);
+      return await formatQfichaje(clean, nombre);
     }
 
-    const f = result.fichaje;
-    const ci = f.checkIn?.[0];
-    let msg = `🕑 *Fichaje (IDP ${clean})*\n\n`;
-    msg += `${f.isCheckInActive ? "🟢 Fichaje activo" : "🔴 Fichaje cerrado"}\n`;
-    if (f.id) msg += `📋 Tarea: \`${f.id}\`\n`;
+    // Caso 2: es un nombre → resolver idp vía QUSUARIOS.
+    const empleados = await findEmpleadosByName(clean);
+    const conIdp = empleados.filter((e) => e.idp);
 
-    if (ci) {
-      if (ci.dateIn || ci.timeIn) msg += `➡️ Entrada: ${ci.dateIn ?? ""} ${ci.timeIn ?? ""}\n`;
-      if (ci.dateOut || ci.timeOut) msg += `⬅️ Salida: ${ci.dateOut ?? ""} ${ci.timeOut ?? ""}\n`;
+    if (conIdp.length === 0) {
+      return `🔍 No se encontró ninguna persona para "${clean}".`;
     }
 
-    const tipos: string[] = [];
-    if (f.isCheckedInToProject) tipos.push("Proyecto");
-    if (f.isCheckedInToQ700) tipos.push("Q700");
-    if (f.isCheckedInToManualTask) tipos.push("Tarea manual");
-    if (tipos.length > 0) msg += `🏷️ Tipo: ${tipos.join(", ")}\n`;
+    if (conIdp.length > 1) {
+      let msg = `👥 Varias coincidencias para "${clean}". Indica el IDP:\n\n`;
+      for (const e of conIdp) {
+        msg += `• \`${e.idp}\` — ${e.name ?? "—"}\n`;
+      }
+      msg += `\nEjemplo: /qfichaje ${conIdp[0].idp}`;
+      return msg.slice(0, 3900);
+    }
 
-    return msg.slice(0, 3900);
+    const e = conIdp[0];
+    return await formatQfichaje(String(e.idp), e.name ?? null);
   } catch (err) {
     return `❌ Error consultando fichaje: ${(err as Error).message}`;
   }
