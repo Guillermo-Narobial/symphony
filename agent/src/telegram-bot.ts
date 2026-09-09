@@ -639,6 +639,7 @@ function cmdChat(chatId: string, input: string): string {
       let msg = r.ok ? "✅ *Sesión /chat completada*" : "⚠️ *Sesión /chat finalizada con incidencias*";
       msg += `\n🌿 Rama: \`${r.branch ?? "?"}\``;
       if (r.solver) msg += ` · 🤖 ${r.solver}`;
+      if (r.resetByInactivity) msg += `\n♻️ Workspace reiniciado por inactividad (>2h): se empezó limpio en \`${r.branch}\`.`;
       msg += `\n\n${r.agentSummary.slice(0, 2800)}`;
       if (r.gitStatus) msg += `\n\n📝 *Cambios sin commitear:*\n\`\`\`\n${r.gitStatus.slice(0, 600)}\n\`\`\``;
       else msg += `\n\n📝 Sin cambios en el working tree.`;

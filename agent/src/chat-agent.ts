@@ -12,7 +12,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { promisify } from "node:util";
 import { AGENT_ENV, runAgentWithFallback } from "./agent-executor.js";
@@ -24,6 +24,9 @@ const FRONTEND_REPO_URL =
   config.repos.find((url) => url.includes("Narobial-Frontend"))
   ?? "https://github.com/Narobial/Narobial-Frontend";
 const RESULT_FILE = "CHAT_RESULT.md";
+/** Tras este tiempo sin usar /chat, el workspace se resetea automáticamente. */
+const INACTIVITY_RESET_MS = 2 * 60 * 60 * 1000; // 2 horas
+const DEFAULT_RESET_BRANCH = "hotfix-master";
 
 export interface ChatSpec {
   /** Rama sobre la que trabajar. Si es null, continúa en el workspace actual. */
@@ -41,6 +44,8 @@ export interface ChatResult {
   gitStatus: string;
   /** git diff --stat del workspace tras la ejecución. */
   gitDiffStat: string;
+  /** true si el workspace se reseteó por inactividad (>2h) antes de ejecutar. */
+  resetByInactivity?: boolean;
   error?: string;
 }
 
@@ -69,6 +74,27 @@ async function ensureWorkspace(): Promise<string> {
     timeout: 300_000,
   });
   return dir;
+}
+
+/** Fichero que guarda el timestamp del último uso de /chat. */
+function activityFile(): string {
+  return resolve(config.agentWorkspacesDir, ".chat-last-activity");
+}
+
+/** Devuelve ms desde el último /chat, o null si no hay registro previo. */
+async function msSinceLastActivity(): Promise<number | null> {
+  try {
+    const raw = await readFile(activityFile(), "utf8");
+    const ts = Number(raw.trim());
+    if (!Number.isFinite(ts)) return null;
+    return Date.now() - ts;
+  } catch {
+    return null;
+  }
+}
+
+async function touchActivity(): Promise<void> {
+  await writeFile(activityFile(), String(Date.now()), "utf8").catch(() => {});
 }
 
 /** Prepara el workspace en la rama indicada (reset limpio). */
@@ -130,9 +156,23 @@ export async function runChatTask(spec: ChatSpec, onStatus: StatusFn): Promise<C
     await checkoutBranch(dir, spec.branch);
     branch = spec.branch;
   } else {
-    branch = await git(dir, "rev-parse", "--abbrev-ref", "HEAD");
+    // Sin rama = continuar. Pero si hubo >2h de inactividad, se resetea el
+    // workspace (se descartan los cambios acumulados de sesiones previas).
+    const idle = await msSinceLastActivity();
+    if (idle !== null && idle > INACTIVITY_RESET_MS) {
+      onStatus(`reset por inactividad (>${Math.round(INACTIVITY_RESET_MS / 3600000)}h)`);
+      await checkoutBranch(dir, DEFAULT_RESET_BRANCH);
+      branch = DEFAULT_RESET_BRANCH;
+      result.resetByInactivity = true;
+    } else {
+      branch = await git(dir, "rev-parse", "--abbrev-ref", "HEAD");
+    }
   }
   result.branch = branch;
+
+  // Registrar actividad al inicio para que el temporizador de inactividad
+  // se mida desde la última petición.
+  await touchActivity();
 
   onStatus(`ejecutando en ${branch}`);
   const prompt = buildChatPrompt(spec, branch);
@@ -150,6 +190,9 @@ export async function runChatTask(spec: ChatSpec, onStatus: StatusFn): Promise<C
   result.gitStatus = await git(dir, "status", "--short");
   result.gitDiffStat = await git(dir, "diff", "--stat");
   result.ok = !result.error;
+
+  // Marca de actividad también al terminar (cubre ejecuciones largas).
+  await touchActivity();
 
   return result;
 }
