@@ -19,6 +19,7 @@ import { fetchNombrePorIdp } from "./qusuarios-query.js";
 import { findEmpleadosByName } from "./qusuarios-query.js";
 import { fetchQfichaje } from "./qfichaje-query.js";
 import { runMergePr } from "./merge-pr.js";
+import { runChatTask } from "./chat-agent.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -175,6 +176,7 @@ Comandos disponibles:
 /create <título> | <descripción> — Crear issue y lanzar agente
 /validarprs <número_pr> — Aprobar y mergear PR con bypass
 /merge <número_pr> — Merge a hotfix-master resolviendo conflictos con IA
+/chat [rama |] <descripción> — Sesión de agente (kiro/codex) sin commitear
 /help — Esta ayuda
 
 Para /create, separa título y cuerpo con |
@@ -579,6 +581,82 @@ function cmdMerge(chatId: string, input: string): string {
   return `🔀 Iniciando merge de la PR #${prNumber} contra hotfix-master.\nTe aviso del progreso cada 60s y al terminar.`;
 }
 
+// --- Sesión de agente one-shot (kiro/codex) con status cada 30s ---
+
+const CHAT_STATUS_INTERVAL_MS = 30_000;
+/** Chats en ejecución por chatId (una sesión a la vez por chat). */
+const chatsInFlight = new Set<string>();
+
+/**
+ * /chat [rama |] descripción — lanza una sesión one-shot con permisos completos.
+ * Con "rama | descripción" prepara esa rama; sin rama, continúa en el workspace
+ * actual (encadenar peticiones). Nunca commitea ni pushea. Status cada 30s.
+ */
+function cmdChat(chatId: string, input: string): string {
+  const raw = input.trim();
+  if (!raw) {
+    return "❓ Uso: /chat [rama |] <descripción>\n" +
+      "Ejemplos:\n" +
+      "• /chat hotfix-master | analiza el componente scheduler\n" +
+      "• /chat sigue con lo anterior (continúa en el workspace actual)";
+  }
+
+  // Parseo: si hay "|", lo de antes es la rama; si no, no hay rama (continuar).
+  let branch: string | null = null;
+  let description = raw;
+  const sep = raw.indexOf("|");
+  if (sep !== -1) {
+    const left = raw.slice(0, sep).trim();
+    const right = raw.slice(sep + 1).trim();
+    if (left) branch = left;
+    description = right;
+  }
+
+  if (!description) {
+    return "❓ Falta la descripción tras la rama. Ej: /chat hotfix-master | tu petición";
+  }
+
+  if (chatsInFlight.has(chatId)) {
+    return "⏳ Ya hay una sesión /chat en curso en este chat. Espera a que termine.";
+  }
+  chatsInFlight.add(chatId);
+
+  let phase = "iniciando";
+  const onStatus = (p: string) => { phase = p; };
+
+  void (async () => {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const mins = Math.floor((Date.now() - startedAt) / 60_000);
+      const secs = Math.floor((Date.now() - startedAt) / 1000) % 60;
+      void sendMessage(chatId, `⏳ /chat en curso (${mins}m ${secs}s) — ${phase}... (aún trabajando)`);
+    }, CHAT_STATUS_INTERVAL_MS);
+
+    try {
+      const r = await runChatTask({ branch, description }, onStatus);
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+
+      let msg = r.ok ? "✅ *Sesión /chat completada*" : "⚠️ *Sesión /chat finalizada con incidencias*";
+      msg += `\n🌿 Rama: \`${r.branch ?? "?"}\``;
+      if (r.solver) msg += ` · 🤖 ${r.solver}`;
+      msg += `\n\n${r.agentSummary.slice(0, 2800)}`;
+      if (r.gitStatus) msg += `\n\n📝 *Cambios sin commitear:*\n\`\`\`\n${r.gitStatus.slice(0, 600)}\n\`\`\``;
+      else msg += `\n\n📝 Sin cambios en el working tree.`;
+      if (r.error) msg += `\n\n❌ Error: ${r.error.slice(0, 400)}`;
+      msg += `\n\n⏱️ ${secs}s · ℹ️ No he commiteado ni pusheado nada. Dime qué hago con estos cambios o lanza otro /chat.`;
+
+      await sendMessage(chatId, msg);
+    } catch (err) {
+      await sendMessage(chatId, `❌ *Error en /chat*\n\n${(err as Error).message}`);
+    } finally {
+      clearInterval(interval);
+      chatsInFlight.delete(chatId);
+    }
+  })();
+
+  return `💬 Sesión /chat iniciada${branch ? ` en \`${branch}\`` : " (continuando en el workspace actual)"}.\nTe aviso cada 30s y al terminar. No commitearé ni pushearé nada sin tu permiso.`;
+}
+
 // --- Natural language intent detection ---
 
 interface DetectedIntent {
@@ -782,6 +860,9 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/merge":
       response = cmdMerge(chatId, argStr);
       break;
+    case "/chat":
+      response = cmdChat(chatId, argStr);
+      break;
     default:
       // Si no es un comando, usar detección de intenciones + LLM fallback
       if (trimmed.startsWith("/")) {
@@ -848,6 +929,7 @@ export function startTelegramBot(): void {
       { command: "create", description: "Crear issue y lanzar agente" },
       { command: "validarprs", description: "Aprobar y mergear PR con bypass" },
       { command: "merge", description: "Merge a hotfix-master resolviendo conflictos con IA" },
+      { command: "chat", description: "Sesión de agente (kiro/codex) sin commitear" },
       { command: "help", description: "Mostrar ayuda" },
     ],
   }).catch(() => { /* non-critical */ });
