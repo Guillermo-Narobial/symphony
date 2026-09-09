@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { config } from "./config.js";
 import { getRunningIssues } from "./solver.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
+import { fetchQabiertos } from "./q700-query.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -186,6 +187,27 @@ function cmdConfig(): string {
 • Max retries: ${config.maxAgentRetries}
 • Kiro→Codex tras: ${config.maxKiroAttemptsBeforeCodex} intentos
 • Deploy: ${config.deployHost}`;
+}
+
+// --- Q700 abiertos (isNarobial + Q1) ---
+
+async function cmdQabiertos(): Promise<string> {
+  try {
+    const items = await fetchQabiertos();
+
+    if (items.length === 0) {
+      return "📭 No hay Q700 disponibles (isNarobial en estado Q1) ahora mismo.";
+    }
+
+    let msg = `📋 *Q700 abiertos (Narobial · Q1) — ${items.length}:*\n\n`;
+    for (const q of items) {
+      const country = q.countryId ? ` [${q.countryId}]` : "";
+      msg += `• \`${q.id}\`${country} — ${q.title}\n`;
+    }
+    return msg.slice(0, 3900);
+  } catch (err) {
+    return `❌ Error consultando Q700: ${(err as Error).message}`;
+  }
 }
 
 // --- Open Pull Requests ---
@@ -550,6 +572,9 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/config":
       response = cmdConfig();
       break;
+    case "/qabiertos":
+      response = await cmdQabiertos();
+      break;
     case "/prs":
       response = await cmdPrs(argStr || undefined);
       break;
@@ -616,6 +641,7 @@ export function startTelegramBot(): void {
     commands: [
       { command: "status", description: "Estado del sistema" },
       { command: "prs", description: "PRs abiertas en el repo" },
+      { command: "qabiertos", description: "Q700 Narobial en estado Q1" },
       { command: "running", description: "Issues en ejecución ahora" },
       { command: "search", description: "Buscar en historial de decisiones" },
       { command: "history", description: "Últimas N entradas del changelog" },
