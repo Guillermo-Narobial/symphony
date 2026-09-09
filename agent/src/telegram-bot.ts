@@ -329,7 +329,7 @@ async function cmdPrs(filterUser?: string): Promise<string> {
       "pr", "list",
       "-R", config.repo,
       "--state", "open",
-      "--json", "number,title,headRefName,url,author",
+      "--json", "number,title,headRefName,url,author,reviewDecision",
       "--limit", "30",
     ];
     if (filterUser) {
@@ -343,6 +343,7 @@ async function cmdPrs(filterUser?: string): Promise<string> {
       headRefName: string;
       url: string;
       author: { login: string };
+      reviewDecision: string;
     }>;
 
     if (prs.length === 0) {
@@ -351,13 +352,37 @@ async function cmdPrs(filterUser?: string): Promise<string> {
         : "✅ No hay PRs abiertas.";
     }
 
+    // Etiqueta de estado de review (Telegram no soporta color; se usa emoji).
+    const reviewLabel = (decision: string): string => {
+      switch (decision) {
+        case "APPROVED": return "🟢 APROBADA";
+        case "CHANGES_REQUESTED": return "🔴 Cambios solicitados";
+        case "REVIEW_REQUIRED": return "🟡 Revisión requerida";
+        default: return "⚪ Sin revisión";
+      }
+    };
+
+    // Las aprobadas primero (destacadas), luego el resto.
+    const approved = prs.filter((p) => p.reviewDecision === "APPROVED");
+    const others = prs.filter((p) => p.reviewDecision !== "APPROVED");
+
     const header = filterUser
-      ? `🔀 *PRs abiertas de* \`${filterUser}\` *(${prs.length}):*\n\n`
-      : `🔀 *PRs abiertas (${prs.length}):*\n\n`;
+      ? `🔀 *PRs abiertas de* \`${filterUser}\` *(${prs.length}, ${approved.length} aprobadas):*\n\n`
+      : `🔀 *PRs abiertas (${prs.length}, ${approved.length} aprobadas):*\n\n`;
+
+    const renderPr = (pr: (typeof prs)[number]): string =>
+      `${pr.reviewDecision === "APPROVED" ? "✅ " : "• "}*#${pr.number}* — ${pr.title}\n` +
+      `  ${reviewLabel(pr.reviewDecision)}\n` +
+      `  ↳ \`${pr.headRefName}\` by ${pr.author?.login ?? "?"}\n  ${pr.url}\n\n`;
 
     let msg = header;
-    for (const pr of prs) {
-      msg += `• #${pr.number} — ${pr.title}\n  ↳ \`${pr.headRefName}\` by ${pr.author?.login ?? "?"}\n  ${pr.url}\n\n`;
+    if (approved.length > 0) {
+      msg += `━━━ ✅ *APROBADAS* ━━━\n\n`;
+      for (const pr of approved) msg += renderPr(pr);
+    }
+    if (others.length > 0) {
+      if (approved.length > 0) msg += `━━━ *PENDIENTES* ━━━\n\n`;
+      for (const pr of others) msg += renderPr(pr);
     }
     return msg.slice(0, 3900);
   } catch (err) {
