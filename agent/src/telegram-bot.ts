@@ -19,6 +19,7 @@ import { fetchNombrePorIdp } from "./qusuarios-query.js";
 import { findEmpleadosByName } from "./qusuarios-query.js";
 import { fetchQfichaje } from "./qfichaje-query.js";
 import { runMergePr } from "./merge-pr.js";
+import { runValidatePrs } from "./validate-prs.js";
 import { runChatTask } from "./chat-agent.js";
 import { runCodeScan } from "./code-scanner.js";
 import nodemailer from "nodemailer";
@@ -175,7 +176,7 @@ Comandos disponibles:
 /config — Configuración activa
 /email <dest> | <asunto> | <cuerpo> — Enviar email
 /create <título> | <descripción> — Crear issue y lanzar agente
-/validarprs <número_pr> — Aprobar y mergear PR con bypass
+/validarprs [número_pr] — Revisa con IA las PRs hotfix/* contra hotfix-master: aprueba las correctas y solicita cambios a las que tienen problemas graves (sin mergear)
 /merge <número_pr> — Merge a hotfix-master resolviendo conflictos con IA
 /chat [rama |] <descripción> — Sesión de agente (kiro/codex) sin commitear
 /generar [minutos] — Escanea code smells (hotfix-master) y crea una issue por hallazgo (alias /q700, /scan)
@@ -496,41 +497,117 @@ Puedes enviar a varios separando con coma:
   return `📧 *Resultado del envío:*\n\n${results.join("\n")}`;
 }
 
-// --- Validar PRs (approve + merge with admin bypass) ---
+// --- Validar PRs (revisión de calidad por IA: approve / request-changes) ---
 
-async function cmdValidarPrs(input: string): Promise<string> {
-  const prNumber = input.trim();
+/** Chats con una validación en curso (una a la vez por chat). */
+const validationsInFlight = new Set<string>();
 
-  if (!prNumber || !/^\d+$/.test(prNumber)) {
-    return `❓ Uso: /validarprs <número_pr>\nEjemplo: /validarprs 1140\n\nAprueba y mergea la PR con bypass de branch protection rules.`;
-  }
-
-  try {
-    // Step 1: Approve the PR
-    await exec("gh", [
-      "pr", "review", prNumber,
-      "--approve",
-      "-R", config.repo,
-    ]);
-
-    // Step 2: Merge with --admin to bypass branch protection + delete branch
-    const { stdout } = await exec("gh", [
-      "pr", "merge", prNumber,
-      "--merge",
-      "--admin",
-      "--delete-branch",
-      "-R", config.repo,
-    ]);
-
-    return `✅ *PR #${prNumber} validada y mergeada*\n\n🔓 Bypass de branch protection aplicado\n🗑️ Rama eliminada\n📋 Repo: \`${config.repo}\`\n\n${stdout.trim()}`;
-  } catch (err) {
-    const errMsg = (err as Error).message || String(err);
-    // Check if approve succeeded but merge failed
-    if (errMsg.includes("merge")) {
-      return `⚠️ PR #${prNumber}: Aprobada pero falló el merge.\n\nError: ${errMsg}`;
+/**
+ * /validarprs [número_pr]
+ *
+ * Revisa con IA las PRs abiertas cuya rama empiece por `hotfix/` y vayan contra
+ * `hotfix-master`. Aprueba las que pasan y solicita cambios (request-changes) a
+ * las que tienen problemas graves. NO mergea ni usa bypass de protecciones.
+ *
+ * Sin número: revisa TODAS las PRs hotfix/* candidatas.
+ * Con número: revisa solo esa PR (si cumple el criterio).
+ *
+ * Corre en background con status periódico y un resumen final.
+ */
+function cmdValidarPrs(chatId: string, input: string): string {
+  const arg = input.trim();
+  let only: number | undefined;
+  if (arg) {
+    if (!/^\d+$/.test(arg)) {
+      return "❓ Uso: /validarprs [número_pr]\n" +
+        "• /validarprs → revisa todas las PRs `hotfix/*` contra `hotfix-master`\n" +
+        "• /validarprs 1140 → revisa solo esa PR\n\n" +
+        "La IA aprueba las correctas y solicita cambios (con motivos) a las que tienen problemas graves. No mergea.";
     }
-    return `❌ Error validando PR #${prNumber}:\n${errMsg}`;
+    only = Number(arg);
   }
+
+  if (validationsInFlight.has(chatId)) {
+    return "⏳ Ya hay una validación de PRs en curso en este chat. Espera a que termine.";
+  }
+  validationsInFlight.add(chatId);
+
+  let phase = "iniciando";
+  const onStatus = (p: string) => { phase = p; };
+
+  void (async () => {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const mins = Math.floor((Date.now() - startedAt) / 60_000);
+      void sendMessage(chatId, `⏳ Validando PRs (${mins} min) — ${phase}...`);
+    }, STATUS_INTERVAL_MS);
+
+    try {
+      const result = await runValidatePrs(onStatus, { only });
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+
+      if (result.error) {
+        await sendMessage(chatId, `❌ *Validación fallida*\n\n${result.error}\n\n⏱️ ${secs}s`);
+        return;
+      }
+
+      if (result.candidates === 0) {
+        const scope = only ? `la PR #${only}` : "PRs";
+        await sendMessage(
+          chatId,
+          `ℹ️ No se encontraron ${scope} abiertas con rama \`hotfix/*\` contra \`hotfix-master\`.\n\n⏱️ ${secs}s`,
+        );
+        return;
+      }
+
+      const approved = result.results.filter((r) => r.applied === "approve");
+      const changes = result.results.filter((r) => r.applied === "request-changes");
+      const errored = result.results.filter((r) => r.applied === "error");
+
+      const lines: string[] = [];
+      lines.push(`🧪 *Validación de PRs completada* (${result.candidates} revisadas)`);
+      lines.push("");
+
+      if (approved.length) {
+        lines.push(`✅ *Aprobadas (${approved.length}):*`);
+        for (const r of approved) {
+          lines.push(`• #${r.number} ${r.title} — @${r.author}`);
+          if (r.summary) lines.push(`   ${r.summary}`);
+        }
+        lines.push("");
+      }
+
+      if (changes.length) {
+        lines.push(`🔴 *Requieren cambios (${changes.length}):*`);
+        for (const r of changes) {
+          lines.push(`• #${r.number} ${r.title} — @${r.author} (${r.issuesCount} problema/s)`);
+          if (r.summary) lines.push(`   ${r.summary}`);
+        }
+        lines.push("");
+      }
+
+      if (errored.length) {
+        lines.push(`⚠️ *No revisadas por error (${errored.length}):*`);
+        for (const r of errored) {
+          lines.push(`• #${r.number} ${r.title} — ${r.error ?? "error desconocido"}`);
+        }
+        lines.push("");
+      }
+
+      lines.push(`⏱️ ${secs}s`);
+      await sendMessage(chatId, lines.join("\n"));
+    } catch (err) {
+      await sendMessage(chatId, `❌ *Error validando PRs*\n\n${(err as Error).message}`);
+    } finally {
+      clearInterval(interval);
+      validationsInFlight.delete(chatId);
+    }
+  })();
+
+  const scope = only ? `la PR #${only}` : "las PRs `hotfix/*` contra `hotfix-master`";
+  return `🧪 Iniciando revisión por IA de ${scope}.\n` +
+    "Aprobaré las correctas y solicitaré cambios a las que tengan problemas graves.\n" +
+    "Te aviso del progreso cada 60s y con un resumen al terminar.";
 }
 
 // --- Merge de PR con resolución de conflictos por IA (background + status) ---
@@ -944,7 +1021,7 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
       response = await cmdEmail(argStr);
       break;
     case "/validarprs":
-      response = await cmdValidarPrs(argStr);
+      response = cmdValidarPrs(chatId, argStr);
       break;
     case "/merge":
       response = cmdMerge(chatId, argStr);
@@ -1021,7 +1098,7 @@ export function startTelegramBot(): void {
       { command: "config", description: "Configuración activa" },
       { command: "email", description: "Enviar email (dest | asunto | cuerpo)" },
       { command: "create", description: "Crear issue y lanzar agente" },
-      { command: "validarprs", description: "Aprobar y mergear PR con bypass" },
+      { command: "validarprs", description: "Revisa PRs hotfix/* con IA: aprueba o solicita cambios (sin merge)" },
       { command: "merge", description: "Merge a hotfix-master resolviendo conflictos con IA" },
       { command: "chat", description: "Sesión de agente (kiro/codex) sin commitear" },
       { command: "generar", description: "Escanea code smells (hotfix-master) y crea issues por hallazgo" },
