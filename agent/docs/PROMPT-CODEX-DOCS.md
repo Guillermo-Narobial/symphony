@@ -38,7 +38,7 @@ Symphony Agent es un orquestador de agentes de IA que automatiza el ciclo de vid
 │                                                                       │
 │  Diario 08:30    │ alerts.ts        → Email alertas proactivas       │
 │  Lunes 06:00     │ changelog-gen.ts → Release notes para stakeholders│
-│  Miércoles 07:40 │ docs-checker.ts  → PRs de JSDoc automático        │
+│  Miércoles 07:40 │ docs-detector.ts → Issue de JSDoc (timer deshabilitado)│
 │  Viernes 19:00   │ deps-checker.ts  → PRs de actualización deps      │
 │  Sábado 08:00    │ auditor.ts       → Seguridad (gitleaks+npm+kiro)  │
 │  Domingo 04:00   │ mutator.ts       → Mutation testing (Stryker)     │
@@ -79,7 +79,7 @@ Symphony Agent es un orquestador de agentes de IA que automatiza el ciclo de vid
 |--------|---------|-------|----------|
 | **Alertas proactivas** | `alerts.ts` | Diario 08:30 | Cobertura < 60%, módulo con ≥3 issues en 14 días, PRs sin revisión ≥48h laborables |
 | **Changelog inteligente** | `changelog-generator.ts` | Lunes 06:00 | Lee CHANGELOG.md + git log, identifica autores, genera RELEASE-NOTES.md legible para stakeholders |
-| **Documentación** | `docs-checker.ts` | Miércoles 07:40 | Detecta funciones/interfaces/métodos sin JSDoc en código nuevo, genera docs con kiro-cli, abre PR |
+| **Documentación** | `docs-detector.ts` | Miércoles 07:40 | Detecta funciones/interfaces/métodos sin JSDoc en código nuevo, crea o reutiliza una issue sin modificar código |
 | **Dependencias** | `deps-checker.ts` | Viernes 19:00 | npm outdated + npm audit en 4 repos, ejecuta npm update + audit fix, abre PRs de actualización |
 | **Auditor de seguridad** | `auditor.ts` | Sábado 08:00 | gitleaks (secrets), npm audit (CVEs critical/high), kiro-cli (XSS, CSP, sanitización, memory leaks, bugs, UI) |
 | **Mutation testing** | `mutator.ts` | Domingo 04:00 | Stryker mutation testing, detecta tests débiles, abre issues con archivos y mutantes sobrevivientes |
@@ -110,7 +110,7 @@ Configurado en `~/.kiro/agents/narobial-frontend.json`. Es el agente que resuelv
 9. REGISTRO                → narobial-changelog (CHANGELOG.md + decisiones/)
 10. MEJORA CONTINUA        → mutator.ts (mutation testing semanal)
 11. SEGURIDAD              → auditor.ts (gitleaks + npm audit + análisis profundo)
-12. DOCUMENTACIÓN          → docs-checker.ts (JSDoc automático)
+12. DOCUMENTACIÓN          → docs-detector.ts (JSDoc automático)
 13. DEPENDENCIAS           → deps-checker.ts (actualización automática)
 14. ALERTAS                → alerts.ts (cobertura, hotspots, PRs estancadas)
 15. RELEASE NOTES          → changelog-generator.ts (resumen para stakeholders)

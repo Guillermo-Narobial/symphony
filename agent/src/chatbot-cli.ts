@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { config } from "./config.js";
 import { searchKnowledgeBase } from "./knowledge-base.js";
+import { readTelemetry } from "./telemetry-reader.js";
 
 const exec = promisify(execFile);
 
@@ -33,6 +34,7 @@ Comandos disponibles:
   issue <número>  — Buscar info de una issue concreta
   failures [n]    — Últimos N fallos registrados (default: 10)
   timers          — Estado de systemd timers
+  telemetry [n]   — Últimas ejecuciones por issue
   config          — Configuración activa del agente
   help            — Mostrar esta ayuda
   exit            — Salir
@@ -259,6 +261,9 @@ async function processCommand(input: string): Promise<boolean> {
       break;
     case "timers":
       await cmdTimers();
+      break;
+    case "telemetry":
+      console.log((await readTelemetry(Number(args[0]) || 10)).join("\n") || "Sin telemetría");
       break;
     case "config":
       cmdConfig();

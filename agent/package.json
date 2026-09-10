@@ -9,6 +9,7 @@
     "audit:weekly": "tsx src/auditor.ts",
     "deps:check": "tsx src/deps-checker.ts",
     "docs:check": "tsx src/docs-checker.ts",
+    "docs:detect": "tsx src/docs-detector.ts",
     "changelog": "tsx src/changelog-generator.ts",
     "alerts": "tsx src/alerts.ts",
     "health": "tsx src/health-monitor.ts",
@@ -17,7 +18,8 @@
     "test:projects-report": "tsx --test src/projects-report-resource-ids.test.ts",
     "mutator:manual": "tsx src/mutator-runner.ts",
     "mutator:manual:bg": "tsx src/mutator-launcher.ts",
-    "build": "tsc",
+    "adr:check": "bash scripts/check-adr-required.sh",
+    "build": "npm run adr:check && tsc",
     "start": "node dist/index.js",
     "coverage:audit": "tsx src/coverage-auditor.ts"
   },

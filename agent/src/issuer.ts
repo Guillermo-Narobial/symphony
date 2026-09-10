@@ -89,7 +89,7 @@ ${custReq || "No proporcionado."}
 `;
 }
 
-async function findExisting(id: string): Promise<number | null> {
+export async function findExisting(id: string): Promise<number | null> {
   const { stdout } = await exec("gh", [
     "issue", "list",
     "-R", config.repo,

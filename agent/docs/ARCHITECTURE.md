@@ -2,20 +2,27 @@
 
 ## Resumen
 
-Symphony Agent es el orquestador autónomo de desarrollo para los proyectos Narobial. Ejecuta un loop principal cada 5 minutos, transforma incidencias del DMS en issues accionables de GitHub, prioriza el trabajo pendiente y delega la resolución en el agente `narobial-frontend` mediante `kiro-cli`.
+Symphony Agent es el orquestador autónomo de desarrollo para los proyectos Narobial. Ejecuta un loop principal cada 5 minutos y delega la resolución en Kiro, con fallback a Codex.
 
-Además del loop principal, el sistema incluye agentes periódicos gestionados con `systemd timers` para alertas, release notes, documentación, dependencias, seguridad y mutation testing.
+### Estado operativo verificado (2026-07-15)
+
+- Loop y solver: operativo.
+- Auditoría, cobertura y mutation testing: operativos con dependencias externas.
+- Documentación: timer deshabilitado; docs-detector crea issues sin modificar código.
+- Telemetría por issue: parcial; escribe JSONL en AGENT_TELEMETRY_FILE.
+- Terminación: grupo de procesos con SIGTERM y SIGKILL tras 10 segundos.
+- Informe de proyectos: valida resultado, código y fecha de salida.
 
 | Atributo | Valor |
 | --- | --- |
-| Servidor | `95.39.37.37` |
-| Ruta | `/home/gcalleja/code/symphony/agent` |
-| Runtime | Node.js 18, TypeScript, `tsx` |
-| Servicio principal | `symphony-agent.service` |
-| Agente IA ejecutor | `kiro-cli` con `narobial-frontend` |
-| Repositorio principal | `Narobial/Narobial-Frontend` |
-| Rama base frontend | `hotfix-master` |
-| Deploy preview | Docker + nginx + SSL en `qdevweb.intraquiter` |
+| Servidor | 95.39.37.37 |
+| Ruta | /home/gcalleja/code/symphony/agent |
+| Runtime | Node.js, TypeScript, tsx |
+| Servicio principal | symphony-agent.service |
+| Agente IA ejecutor | kiro-cli con narobial-frontend |
+| Repositorio principal | Narobial/Narobial-Frontend |
+| Rama base frontend | hotfix-master |
+| Deploy preview | Docker + nginx + SSL en qdevweb.intraquiter |
 
 ## Vista General
 
@@ -45,7 +52,7 @@ flowchart TB
     subgraph Timers[Agentes periódicos systemd]
         Alerts[alerts.ts]
         ChangelogGen[changelog-generator.ts]
-        Docs[docs-checker.ts]
+        Docs[docs-detector.ts]
         Deps[deps-checker.ts]
         Audit[auditor.ts]
         Mutator[mutator.ts]
@@ -403,7 +410,7 @@ gantt
     section Lunes
     Release notes               :changelog, 06:00, 45m
     section Miércoles
-    Documentación JSDoc         :docs, 07:40, 60m
+    Detector de documentación (timer deshabilitado) :docs, 07:40, 60m
     section Viernes
     Dependencias                :deps, 19:00, 90m
     section Sábado
@@ -464,7 +471,7 @@ Produce:
 - Autores inferidos desde commits y ramas.
 - Email con conteo de features, fixes y contribuidores.
 
-### `docs-checker.ts` - Documentación automática
+### `docs-detector.ts` - Detector de documentación
 
 Timer: miércoles a las 07:40.
 
@@ -669,7 +676,7 @@ Requisitos externos:
 | --- | --- | --- | --- |
 | `symphony-alerts.timer` | `symphony-alerts.service` | `*-*-* 08:30:00` | `/usr/bin/npx tsx src/alerts.ts` |
 | `symphony-changelog.timer` | `symphony-changelog.service` | `Mon *-*-* 06:00:00` | `/usr/bin/npx tsx src/changelog-generator.ts` |
-| `symphony-docs.timer` | `symphony-docs.service` | `Wed *-*-* 07:40:00` | `/usr/bin/npx tsx src/docs-checker.ts` |
+| `symphony-docs.timer` | `symphony-docs.service` | `Wed *-*-* 07:40:00` | Deshabilitado; ejecución manual: `/usr/bin/npx tsx src/docs-detector.ts` |
 | `symphony-deps.timer` | `symphony-deps.service` | `Fri *-*-* 19:00:00` | `/usr/bin/npx tsx src/deps-checker.ts` |
 | `symphony-audit.timer` | `symphony-audit.service` | `Sat *-*-* 08:00:00` | `/usr/bin/npx tsx src/auditor.ts` |
 | `symphony-mutator.timer` | `symphony-mutator.service` | `Sun *-*-* 04:00:00` | `/usr/bin/npx tsx src/mutator.ts` |
@@ -685,7 +692,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now symphony-agent.service
 sudo systemctl enable --now symphony-alerts.timer
 sudo systemctl enable --now symphony-changelog.timer
-sudo systemctl enable --now symphony-docs.timer
+systemctl # Timer de documentación deshabilitado; ejecutar docs-detector manualmente
 sudo systemctl enable --now symphony-deps.timer
 sudo systemctl enable --now symphony-audit.timer
 sudo systemctl enable --now symphony-mutator.timer
@@ -935,7 +942,7 @@ Revisar:
 | Ver timers | `systemctl list-timers 'symphony-*'` |
 | Ejecutar alertas manualmente | `npx tsx src/alerts.ts` |
 | Ejecutar changelog manualmente | `npx tsx src/changelog-generator.ts` |
-| Ejecutar docs manualmente | `npx tsx src/docs-checker.ts` |
+| Ejecutar docs manualmente | `npx tsx src/docs-detector.ts` |
 | Ejecutar dependencias manualmente | `npx tsx src/deps-checker.ts` |
 | Ejecutar auditoría manualmente | `npx tsx src/auditor.ts` |
 | Ejecutar mutator manualmente | `npx tsx src/mutator.ts` |
@@ -966,7 +973,7 @@ Revisar:
 
 - La priorización usa heurísticas simples sobre labels, título y longitud del body.
 - La Knowledge Base usa coincidencia léxica local, no embeddings.
-- `docs-checker.ts` depende de que `kiro-cli` devuelva el archivo completo sin explicaciones.
+- El antiguo `docs-checker.ts` queda como implementación manual; el flujo operativo usa `docs-detector.ts`.
 - `runner.ts` fija `hotfix-master` como base en el flujo principal.
 - `notifier-email.ts` tiene remitente y destinatario hardcodeados.
 - `install.sh` no instala todos los timers periódicos incluidos en `systemd/`.

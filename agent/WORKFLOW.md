@@ -74,6 +74,15 @@ tipo(contexto): Descripción en español
 
 Types: fix, feat, docs, style, refactor, build.
 
+## Sincronización obligatoria antes de cambios
+
+Antes de crear o modificar una rama de trabajo:
+
+1. Actualiza la rama base con `git fetch origin` y `git pull --ff-only` (o rebasea la rama sobre la base actualizada).
+2. Comprueba `git status --short` y resuelve o aparta cualquier cambio local antes de continuar.
+3. Justo antes de commit/push, vuelve a traer la base y rebasea si ha avanzado.
+4. No abras una PR desde una rama que esté detrás de su base; verifica el estado de merge en GitHub.
+
 ## Quality bar before PR
 
 - Tests pass for changed files.

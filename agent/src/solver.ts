@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { AGENT_ENV } from "./agent-executor.js";
@@ -419,7 +420,8 @@ function launchAgent(plan: AgentLaunchPlan): void {
       console.log(`✅ Agente terminó #${issue.number}`);
     })
     .catch(async (err) => {
-      console.error(`❌ Agente falló #${issue.number}:`, err);
+      await appendFile(process.env.AGENT_TELEMETRY_FILE ?? "symphony-agent-telemetry.jsonl", JSON.stringify({ issue: issue.number, finishedAt: new Date().toISOString(), status: "failed", error: String(err) }) + "\n").catch(() => {});
+      console.error(`❌ Agente falló #:`, err);
       await recordFailure(issue, err).catch((recordErr) => {
         console.error(`❌ No se pudo registrar el fallo de #${issue.number}:`, recordErr);
       });

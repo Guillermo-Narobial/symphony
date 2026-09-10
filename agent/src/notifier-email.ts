@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { renderEmail } from "./email-template.js";
 
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.gmail.com",
@@ -64,7 +65,7 @@ export async function notifyRejectionEmail(taskId: string, reason: string): Prom
 }
 
 export async function notifyEmail(subject: string, html: string): Promise<void> {
-  const mail = { from: FROM, subject, html };
+  const mail = { from: FROM, subject, html: renderEmail(subject, html) };
   await sendWithFallback(mail, TO_PRIMARY, TO_FALLBACK);
 }
 

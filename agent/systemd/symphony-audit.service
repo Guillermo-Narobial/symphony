@@ -5,5 +5,5 @@ Description=Symphony weekly code audit runner
 Type=oneshot
 WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/npx tsx src/auditor.ts
+ExecStart=/usr/bin/flock -n -E 75 /run/user/%U/symphony-capacity-audit.lock /usr/bin/npx tsx src/auditor.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env

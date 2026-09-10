@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { appendFile } from "node:fs/promises";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -249,10 +250,13 @@ export async function runAgent(
   const workDir = await prepareAgentRun(issueNumber, branch, baseBranch);
   const finalPrompt = await buildAgentPrompt(issueNumber, title, body, branch, baseBranch, previousFailureContext, routerContext);
 
+  const startedAt = new Date();
+  const runId = "issue-" + issueNumber + "-" + Date.now();
   const result = await runAgentWithFallback(finalPrompt, workDir, {
     forceCodex: config.solverCommand === "codex" || forceCodex,
   });
-  console.log(`✅ Solver finalizado con ${result.solver}${result.usedFallback ? " (fallback)" : ""}`);
+  await appendFile(resolve(process.env.AGENT_TELEMETRY_FILE ?? "symphony-agent-telemetry.jsonl"), JSON.stringify({ runId, issue: issueNumber, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(), durationMs: Date.now() - startedAt.getTime(), solver: result.solver, usedFallback: result.usedFallback, status: "solver-completed" }) + "\n");
+  console.log(`✅ Solver finalizado con `);
 
   if (!(await hasCommitsSince(workDir, baseBranch))) {
     throw new Error("El solver terminó sin generar commits");

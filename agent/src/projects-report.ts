@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import nodemailer from "nodemailer";
 import { config } from "./config.js";
+import { renderEmail } from "./email-template.js";
 import { analystDeveloperIds, projectResourceIds } from "./projects-report-resource-ids.js";
 
 interface RecipientRoute {
@@ -16,10 +17,8 @@ const ONLY_FIXED_RECIPIENTS = process.env.PROJECTS_REPORT_ONLY_FIXED_RECIPIENTS 
 const REPORT_STATE_PATH = resolve(process.env.PROJECTS_REPORT_STATE_FILE ?? "./.projects-report-state.json");
 
 const FIXED_SUMMARY_RECIPIENTS: RecipientRoute[] = [
-  {
-    primary: "guillermo.calleja@quiter.com",
-    fallback: "guillermo.calleja@narobial.net",
-  },
+  { primary: "guillermo.calleja@quiter.com", fallback: "guillermo.calleja@narobial.net" },
+  { primary: "guillermo.calleja@narobial.net", fallback: "guillermo.calleja@quiter.com" },
   {
     primary: "jaime.garcia@quiter.com",
     fallback: "jaime.garcia@narobial.net",
@@ -95,6 +94,8 @@ async function fetchItems(method: string): Promise<WorkItem[]> {
   });
 
   const all = new Map<string, WorkItem>();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
 
   for (const searchValue of SEARCH_VALUES) {
     const res = await fetch(config.dmsUrl, {
@@ -114,6 +115,7 @@ async function fetchItems(method: string): Promise<WorkItem[]> {
       body: JSON.stringify({
         queryParams: { searchValue, isOpened: true },
       }),
+      signal: controller.signal,
     });
     if (!res.ok) throw new Error(`DMS error (${searchValue}): ${res.status}`);
     const data = await res.json();
@@ -121,6 +123,7 @@ async function fetchItems(method: string): Promise<WorkItem[]> {
     for (const p of procedures) all.set(p.id, p);
   }
 
+  clearTimeout(timeout);
   return [...all.values()];
 }
 
@@ -171,69 +174,69 @@ function buildHtml(sections: ProjectSections): string {
   const today = new Date().toISOString().slice(0, 10);
   const { expiringToday, q700ExpiringToday, devExpired, pilotInterno, pilotSac } = sections;
 
-  let html = `<h1>⚠️ Resumen diario de proyectos</h1>`;
+  let html = `<h1 style="margin:0 0 24px;color:#172554;font-size:26px">⚠️ Resumen diario de proyectos</h1>`;
 
-  html += `<h2>📅 Proyectos en Desarrollo que caducan hoy (${today})</h2>`;
+  html += `<h2 style="margin:28px 0 12px;padding:12px 14px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:6px;color:#172554;font-size:18px">📅 Proyectos en Desarrollo que caducan hoy (${today})</h2>`;
   if (expiringToday.length === 0) {
     html += `<p>Ninguno</p>`;
   } else {
     const rows = expiringToday
       .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${getResourceIds(p)}</td></tr>`)
       .join("");
-    html += `<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Título</th><th>Desarrollador</th></tr>
+    html += `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe4f0;border-radius:8px;overflow:hidden;margin-bottom:18px;font-size:13px">
+<tr style="background:#172554;color:#ffffff"><th style="padding:10px 12px;text-align:left;font-size:12px">ID</th><th style="padding:10px 12px;text-align:left;font-size:12px">Título</th><th style="padding:10px 12px;text-align:left;font-size:12px">Desarrollador</th></tr>
 ${rows}
 </table>`;
   }
 
-  html += `<h2>🧾 Q700 que caducan hoy (${today})</h2>`;
+  html += `<h2 style="margin:28px 0 12px;padding:12px 14px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:6px;color:#172554;font-size:18px">🧾 Q700 que caducan hoy (${today})</h2>`;
   if (q700ExpiringToday.length === 0) {
     html += `<p>Ninguna</p>`;
   } else {
     const rows = q700ExpiringToday
       .map((q) => `<tr><td>${q.id}</td><td>${q.title}</td><td>${getResourceIds(q)}</td><td>${q.estimatedDevelopmentEndDate ?? ""}</td></tr>`)
       .join("");
-    html += `<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Título</th><th>Desarrollador</th><th>Fecha estimada fin</th></tr>
+    html += `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe4f0;border-radius:8px;overflow:hidden;margin-bottom:18px;font-size:13px">
+<tr style="background:#172554;color:#ffffff"><th style="padding:10px 12px;text-align:left;font-size:12px">ID</th><th style="padding:10px 12px;text-align:left;font-size:12px">Título</th><th style="padding:10px 12px;text-align:left;font-size:12px">Desarrollador</th><th style="padding:10px 12px;text-align:left;font-size:12px">Fecha estimada fin</th></tr>
 ${rows}
 </table>`;
   }
 
-  html += `<h2>🔧 Proyectos en Desarrollo con fecha vencida</h2>`;
+  html += `<h2 style="margin:28px 0 12px;padding:12px 14px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:6px;color:#172554;font-size:18px">🔧 Proyectos en Desarrollo con fecha vencida</h2>`;
   if (devExpired.length === 0) {
     html += `<p>Sin proyectos</p>`;
   } else {
     const rows = devExpired
       .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${getResourceIds(p)}</td><td>${p.estimatedDevelopmentEndDate}</td></tr>`)
       .join("");
-    html += `<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Título</th><th>Desarrollador</th><th>Fecha estimada fin</th></tr>
+    html += `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe4f0;border-radius:8px;overflow:hidden;margin-bottom:18px;font-size:13px">
+<tr style="background:#172554;color:#ffffff"><th style="padding:10px 12px;text-align:left;font-size:12px">ID</th><th style="padding:10px 12px;text-align:left;font-size:12px">Título</th><th style="padding:10px 12px;text-align:left;font-size:12px">Desarrollador</th><th style="padding:10px 12px;text-align:left;font-size:12px">Fecha estimada fin</th></tr>
 ${rows}
 </table>`;
   }
 
-  html += `<h2>🧪 Proyectos en Pilotaje Interno</h2>`;
+  html += `<h2 style="margin:28px 0 12px;padding:12px 14px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:6px;color:#172554;font-size:18px">🧪 Proyectos en Pilotaje Interno</h2>`;
   if (pilotInterno.length === 0) {
     html += `<p>Sin proyectos</p>`;
   } else {
     const rows = pilotInterno
       .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${getResourceIds(p)}</td></tr>`)
       .join("");
-    html += `<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Título</th><th>Desarrollador</th></tr>
+    html += `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe4f0;border-radius:8px;overflow:hidden;margin-bottom:18px;font-size:13px">
+<tr style="background:#172554;color:#ffffff"><th style="padding:10px 12px;text-align:left;font-size:12px">ID</th><th style="padding:10px 12px;text-align:left;font-size:12px">Título</th><th style="padding:10px 12px;text-align:left;font-size:12px">Desarrollador</th></tr>
 ${rows}
 </table>`;
   }
 
-  html += `<h2>🏢 Proyectos en Pilotaje SAC</h2>`;
+  html += `<h2 style="margin:28px 0 12px;padding:12px 14px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:6px;color:#172554;font-size:18px">🏢 Proyectos en Pilotaje SAC</h2>`;
   if (pilotSac.length === 0) {
     html += `<p>Sin proyectos</p>`;
   } else {
     const rows = pilotSac
       .map((p) => `<tr><td>${p.id}</td><td>${p.title}</td><td>${getResourceIds(p)}</td></tr>`)
       .join("");
-    html += `<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Título</th><th>Desarrollador</th></tr>
+    html += `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #dbe4f0;border-radius:8px;overflow:hidden;margin-bottom:18px;font-size:13px">
+<tr style="background:#172554;color:#ffffff"><th style="padding:10px 12px;text-align:left;font-size:12px">ID</th><th style="padding:10px 12px;text-align:left;font-size:12px">Título</th><th style="padding:10px 12px;text-align:left;font-size:12px">Desarrollador</th></tr>
 ${rows}
 </table>`;
   }
@@ -342,7 +345,7 @@ async function sendMailToRoute(
   subject: string,
   html: string,
 ): Promise<string> {
-  const mail = { from: "noreply@narobial.net", subject, html };
+  const mail = { from: "noreply@narobial.net", subject, html: renderEmail(subject, html, "Resumen diario de proyectos de Symphony Agent") };
 
   for (let attempt = 1; attempt <= MAIL_RETRY_ATTEMPTS; attempt += 1) {
     try {

@@ -7,8 +7,29 @@ WorkingDirectory=/home/gcalleja/code/symphony/agent
 Environment=PATH=/home/gcalleja/.nvm/versions/node/v24.16.0/bin:/home/gcalleja/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=DOCS_MAX_FILES=3
 Environment=DOCS_FILE_TIMEOUT_MS=240000
-ExecStart=/usr/bin/npx tsx src/docs-checker.ts
+Environment=CODEX_HOME=/tmp/symphony-codex-home
+ExecStartPre=/usr/bin/install -d -m 700 /tmp/symphony-codex-home
+ExecStartPre=/usr/bin/cp --preserve=mode /home/gcalleja/.codex/auth.json /tmp/symphony-codex-home/auth.json
+ExecStart=/usr/bin/flock -n -E 75 /run/user/%U/symphony-capacity-documentation.lock /usr/bin/npx tsx src/docs-detector.ts
 EnvironmentFile=/home/gcalleja/code/symphony/agent/.env
 TimeoutStartSec=1800
 MemoryMax=4G
 CPUQuota=100%
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=/tmp /run/user/%U
+BindReadOnlyPaths=/home/gcalleja/code/symphony/agent
+BindReadOnlyPaths=/home/gcalleja/.nvm/versions/node/v24.16.0
+BindReadOnlyPaths=/home/gcalleja/.codex/auth.json
+BindReadOnlyPaths=/home/gcalleja/.gitconfig
+BindReadOnlyPaths=/home/gcalleja/.git-credentials
+BindReadOnlyPaths=/home/gcalleja/.config/gh
+InaccessiblePaths=/home/gcalleja/code/symphony/agent/.env

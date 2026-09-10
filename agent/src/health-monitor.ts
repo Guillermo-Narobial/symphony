@@ -11,6 +11,8 @@ import { branchNameForIssue } from "./runner.js";
 const exec = promisify(execFile);
 
 const STUCK_MINUTES = Number(process.env.AGENT_STUCK_MINUTES ?? "45");
+const TELEMETRY_FILE = resolve(process.env.AGENT_TELEMETRY_FILE ?? "symphony-agent-telemetry.jsonl");
+const MONITORED_TIMERS = ["symphony-alerts.timer", "symphony-changelog.timer", "symphony-docs.timer", "symphony-deps.timer", "symphony-audit.timer", "symphony-mutator.timer"];
 const ALERT_COOLDOWN_MINUTES = Number(process.env.AGENT_HEALTH_ALERT_COOLDOWN_MINUTES ?? "60");
 const DASHBOARD_HTML = resolve(process.env.AGENT_HEALTH_DASHBOARD_HTML ?? "./docs/agent-health.html");
 const DASHBOARD_JSON = resolve(process.env.AGENT_HEALTH_DASHBOARD_JSON ?? "./docs/agent-health.json");
@@ -145,7 +147,7 @@ function buildAlerts(snapshot: Omit<HealthSnapshot, "alerts">): HealthAlert[] {
   const alerts: HealthAlert[] = [];
 
   for (const service of snapshot.services) {
-    if (!service.active) {
+    if (!service.active && !(service.name === "symphony-docs.timer" && service.enabledStatus === "disabled")) {
       alerts.push({
         title: `${service.name} no está activo`,
         detail: `Estado systemd: ${service.status}; habilitacion: ${service.enabledStatus}`,
@@ -292,13 +294,13 @@ async function notifyIfNeeded(snapshot: HealthSnapshot): Promise<void> {
   await writeFile(STATE_FILE, JSON.stringify({ signature, sentAt: new Date().toISOString() }, null, 2));
 }
 
+async function timerHealth(): Promise<ServiceHealth[]> { return Promise.all(MONITORED_TIMERS.map(systemctlIsActive)); }
+
 async function main(): Promise<void> {
   console.log("🩺 Symphony health monitor — inicio");
 
   const [services, processingIssues, failedIssues, openPullRequests] = await Promise.all([
-    Promise.all([
-      systemctlIsActive("symphony-agent.service"),
-    ]),
+    Promise.all([systemctlIsActive("symphony-agent.service"), ...(await timerHealth())]),
     fetchIssues(config.processingLabel),
     fetchIssues("agent-failed"),
     fetchOpenPullRequests(),

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,6 +15,11 @@ const LABEL = "docs:jsdoc";
 const MAX_FILES = positiveInteger(process.env.DOCS_MAX_FILES, 3);
 const FILE_TIMEOUT_MS = positiveInteger(process.env.DOCS_FILE_TIMEOUT_MS, 240_000);
 const DRY_RUN = process.env.DOCS_DRY_RUN === "1";
+const CODEX_ENV_KEYS = [
+  "CODEX_HOME", "HOME", "PATH", "LANG", "LC_ALL",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+  "SSL_CERT_FILE", "SSL_CERT_DIR",
+] as const;
 
 interface RepoHandle {
   workDir: string;
@@ -31,6 +36,13 @@ interface UndocumentedItem {
 function positiveInteger(rawValue: string | undefined, fallback: number): number {
   const value = Number(rawValue ?? fallback);
   return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function codexEnvironment(): NodeJS.ProcessEnv {
+  return Object.fromEntries(CODEX_ENV_KEYS.flatMap((key) => {
+    const value = process.env[key];
+    return value === undefined ? [] : [[key, value]];
+  }));
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -155,11 +167,15 @@ async function runCodexForFile(workDir: string, file: string, items: Undocumente
   const prompt = `Edita exclusivamente el archivo ${file} y añade JSDoc a estas declaraciones:\n${declarations}\n\nReglas obligatorias:\n- Solo puedes añadir bloques /** ... */ encima de las declaraciones indicadas.\n- Incluye @param y @returns únicamente cuando correspondan.\n- No cambies código, imports, formato ni tests.\n- No ejecutes git, no hagas commit, push ni crees archivos.\n- Termina tras guardar el archivo.`;
 
   try {
-    await exec("codex", [
+    execFileSync("codex", [
       "exec",
       "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "-c", "project_doc_max_bytes=0",
+      "-c", "model_reasoning_effort=\"low\"",
       "--color", "never",
-      "--sandbox", "workspace-write",
+      "--sandbox", "danger-full-access",
       "-C", workDir,
       prompt,
     ], {
@@ -167,7 +183,8 @@ async function runCodexForFile(workDir: string, file: string, items: Undocumente
       timeout: FILE_TIMEOUT_MS,
       killSignal: "SIGTERM",
       maxBuffer: 1024 * 1024 * 20,
-      env: process.env,
+      env: codexEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     const changed = (await git(workDir, "diff", "--name-only")).split("\n").filter(Boolean);

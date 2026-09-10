@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -42,12 +42,13 @@ async function runProcess(command: string, args: string[], cwd: string): Promise
       cwd,
       env: AGENT_ENV,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
 
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; proc.kill("SIGTERM"); }, AGENT_MAX_RUNTIME_MS);
+    const timeout = setTimeout(() => { timedOut = true; if (proc.pid) { try { process.kill(-proc.pid, "SIGTERM"); } catch {} setTimeout(() => { try { if (proc.pid) process.kill(-proc.pid, "SIGKILL"); } catch {} }, 10000); } }, AGENT_MAX_RUNTIME_MS);
     proc.stdout?.on("data", (d: Buffer) => {
       const text = d.toString();
       stdout += text;

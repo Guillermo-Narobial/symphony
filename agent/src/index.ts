@@ -7,6 +7,7 @@ import { fetchTasks } from "./fetcher.js";
 import { processTask } from "./controller.js";
 import { solveIssues } from "./solver.js";
 import { reviewWatcher } from "./review-watcher.js";
+import { findExisting } from "./issuer.js";
 import { startStatusServer } from "./status-server.js";
 import { startTelegramBot } from "./telegram-bot.js";
 
@@ -73,7 +74,19 @@ async function tick() {
     });
     console.log(`🎯 ${tasks.length} tarea(s) asignadas a gcalleja/nagent`);
 
-    // Solo sincronizamos los repos si hay trabajo DMS nuevo que procesar.
+    const newTasks: typeof tasks = [];
+    for (const task of tasks) {
+      const taskId = String((task as { id?: unknown }).id ?? "");
+      const existingIssue = await findExisting(taskId);
+      if (existingIssue) {
+        console.log("⏭️ Tarea " + taskId + ": issue #" + existingIssue + " ya existe; no se sincronizan repos");
+      } else {
+        newTasks.push(task);
+      }
+    }
+    tasks = newTasks;
+
+    // Solo sincronizamos los repos si hay tareas DMS nuevas que procesar.
     if (tasks.length > 0) {
       await syncRepos();
       console.log("✅ Repos sincronizados para procesar tareas nuevas");
@@ -98,7 +111,14 @@ await tick();
 setInterval(tick, INTERVAL_MS);
 
 // Review watcher: cada 10 min revisa issues en-revision con feedback
-const REVIEW_INTERVAL_MS = 10 * 60_000;
+const REVIEW_INTERVAL_MS = Number(process.env.REVIEW_WATCH_INTERVAL_MS ?? 30 * 60_000);
+let reviewWatcherRunning = false;
 setInterval(async () => {
+  if (reviewWatcherRunning) {
+    console.log("⏳ Review watcher anterior aún está en curso; se omite esta ronda");
+    return;
+  }
+  reviewWatcherRunning = true;
   try { await reviewWatcher(); } catch (err) { console.error("❌ Error en reviewWatcher:", err); }
+  finally { reviewWatcherRunning = false; }
 }, REVIEW_INTERVAL_MS);
