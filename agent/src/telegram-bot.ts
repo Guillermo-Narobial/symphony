@@ -20,6 +20,7 @@ import { findEmpleadosByName } from "./qusuarios-query.js";
 import { fetchQfichaje } from "./qfichaje-query.js";
 import { runMergePr } from "./merge-pr.js";
 import { runChatTask } from "./chat-agent.js";
+import { runCodeScan } from "./code-scanner.js";
 import nodemailer from "nodemailer";
 
 const exec = promisify(execFile);
@@ -177,6 +178,7 @@ Comandos disponibles:
 /validarprs <número_pr> — Aprobar y mergear PR con bypass
 /merge <número_pr> — Merge a hotfix-master resolviendo conflictos con IA
 /chat [rama |] <descripción> — Sesión de agente (kiro/codex) sin commitear
+/generar [minutos] — Escanea code smells (hotfix-master) y crea una issue por hallazgo (alias /q700, /scan)
 /help — Esta ayuda
 
 Para /create, separa título y cuerpo con |
@@ -658,6 +660,92 @@ function cmdChat(chatId: string, input: string): string {
   return `💬 Sesión /chat iniciada${branch ? ` en \`${branch}\`` : " (continuando en el workspace actual)"}.\nTe aviso cada 30s y al terminar. No commitearé ni pushearé nada sin tu permiso.`;
 }
 
+// --- Escaneo de code smells + creación de issues (background + status) ---
+
+const SCAN_STATUS_INTERVAL_MS = 60_000;
+/** Presupuesto de escaneo por defecto (~10 min). Configurable con /generar <min>. */
+const SCAN_DEFAULT_MINUTES = 10;
+const SCAN_MIN_MINUTES = 1;
+const SCAN_MAX_MINUTES = 30;
+/** Solo un escaneo global a la vez (es costoso y toca el mismo workspace). */
+let scanInFlight = false;
+
+/**
+ * /generar [minutos] — lanza un escaneo de calidad sobre Narobial-Frontend
+ * (rama hotfix-master) durante la ventana indicada (~10 min por defecto),
+ * detectando code smells de Angular y creando una issue de GitHub por hallazgo.
+ *
+ * Corre en background: responde de inmediato, envía status cada 60s y un
+ * mensaje final con el resumen (issues creadas, duplicados omitidos, etc.).
+ */
+function cmdGenerar(chatId: string, input: string): string {
+  const arg = input.trim();
+
+  // Argumento opcional: minutos de escaneo.
+  let minutes = SCAN_DEFAULT_MINUTES;
+  if (arg) {
+    const n = Number(arg);
+    if (!Number.isFinite(n) || n <= 0) {
+      return `❓ Uso: /generar [minutos]\nEjemplos:\n• /generar (escanea ~${SCAN_DEFAULT_MINUTES} min)\n• /generar 15 (escanea ~15 min)`;
+    }
+    minutes = Math.min(SCAN_MAX_MINUTES, Math.max(SCAN_MIN_MINUTES, Math.round(n)));
+  }
+
+  if (scanInFlight) {
+    return "⏳ Ya hay un escaneo en curso. Espera a que termine antes de lanzar otro.";
+  }
+  scanInFlight = true;
+
+  const budgetMs = minutes * 60_000;
+  let phase = "iniciando";
+  const onStatus = (p: string) => { phase = p; };
+
+  void (async () => {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const mins = Math.floor((Date.now() - startedAt) / 60_000);
+      void sendMessage(chatId, `⏳ Escaneo en curso (${mins} min) — ${phase}...`);
+    }, SCAN_STATUS_INTERVAL_MS);
+
+    try {
+      const r = await runCodeScan(onStatus, { budgetMs });
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+
+      let msg = r.ok ? "✅ *Escaneo completado*" : "⚠️ *Escaneo finalizado con incidencias*";
+      msg += `\n🌿 Rama: \`${r.branch}\``;
+      if (r.solver) msg += ` · 🤖 ${r.solver}`;
+      msg += `\n\n📊 Hallazgos: ${r.findingsCount}`;
+      msg += `\n🆕 Issues creadas: ${r.createdIssues.length}`;
+      if (r.skippedDuplicates > 0) msg += `\n♻️ Duplicados omitidos: ${r.skippedDuplicates}`;
+      if (r.invalidFindings > 0) msg += `\n⚠️ Hallazgos descartados (formato): ${r.invalidFindings}`;
+
+      if (r.createdIssues.length > 0) {
+        msg += `\n\n*Issues creadas:*\n`;
+        for (const issue of r.createdIssues.slice(0, 25)) {
+          msg += `• ${issue.url}\n`;
+        }
+        if (r.createdIssues.length > 25) {
+          msg += `… y ${r.createdIssues.length - 25} más.\n`;
+        }
+      } else if (r.findingsCount === 0) {
+        msg += `\n\nℹ️ No se registraron hallazgos en esta ventana.`;
+      }
+
+      if (r.error) msg += `\n\n❌ Nota: ${r.error.slice(0, 400)}`;
+      msg += `\n\n⏱️ ${secs}s`;
+
+      await sendMessage(chatId, msg);
+    } catch (err) {
+      await sendMessage(chatId, `❌ *Error en /generar*\n\n${(err as Error).message}`);
+    } finally {
+      clearInterval(interval);
+      scanInFlight = false;
+    }
+  })();
+
+  return `🔎 Escaneo de calidad iniciado sobre \`Narobial-Frontend\` (rama hotfix-master), ventana ~${minutes} min.\nBuscaré code smells de Angular y crearé una issue por hallazgo. Te aviso cada 60s y al terminar.`;
+}
+
 // --- Natural language intent detection ---
 
 interface DetectedIntent {
@@ -864,6 +952,11 @@ async function handleMessage(chatId: string, text: string): Promise<void> {
     case "/chat":
       response = cmdChat(chatId, argStr);
       break;
+    case "/generar":
+    case "/q700":
+    case "/scan":
+      response = cmdGenerar(chatId, argStr);
+      break;
     default:
       // Si no es un comando, usar detección de intenciones + LLM fallback
       if (trimmed.startsWith("/")) {
@@ -931,6 +1024,7 @@ export function startTelegramBot(): void {
       { command: "validarprs", description: "Aprobar y mergear PR con bypass" },
       { command: "merge", description: "Merge a hotfix-master resolviendo conflictos con IA" },
       { command: "chat", description: "Sesión de agente (kiro/codex) sin commitear" },
+      { command: "generar", description: "Escanea code smells (hotfix-master) y crea issues por hallazgo" },
       { command: "help", description: "Mostrar ayuda" },
     ],
   }).catch(() => { /* non-critical */ });
